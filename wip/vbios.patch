@@ -1,0 +1,3429 @@
+Index: elilo_code.c
+===================================================================
+--- elilo_code.c	(revision 498)
++++ elilo_code.c	(working copy)
+@@ -65,12 +65,12 @@
+ int
+ create_boot_params(boot_params_t *bp, char *cmdline)
+ {
+-	uint16_t		hdr_version;
++	uint16_t	hdr_version;
+ 	linux_header_t	org_linux_header;
+ 
+ 	// save a copy of the original linux header
+ 	org_linux_header = *(linux_header_t*)bp;
+-	//printk(" initrd_addr_max=0x%lx ", org_linux_header.initrd_addr_max);
++	//print(" initrd_addr_max=0x%lx ", org_linux_header.initrd_addr_max);
+ 	//sleep(20);
+ 	
+ 	// Save off our header revision information.
+@@ -156,7 +156,6 @@
+ 	start = end - size;
+ 	start &= ~0xfff; // page align
+ 	end = start + size;
+-
+ 	*/
+ 
+ 	// APM BIOS info.
+@@ -220,7 +219,7 @@
+ 	//bp->s.is_vga			= 1; // VGA in standard 80x25 text mode
+ 	//bp->s.is_vga			= 0; // seems to imply VIDEO_TYPE_EGAC if zero (drivers/char/vga.c)
+ 	//bp->s.orig_video_mode	= 0;
+-	//bp->s.orig_video_mode	= 3; // what is mode = 3 ???
++	//bp->s.orig_video_mode	= 3; // what is mode = 3 answer vga vdeo mode 3 (80x25 text mode)
+ 	bp->s.orig_ega_bx		= 0;
+ 
+ 	bp->s.lfb_width			= mach_bp->video.width;
+@@ -248,12 +247,12 @@
+ 	bp->s.efi_mem_desc_ver	= mach_bp->efi_mem_desc_ver;
+ 	bp->s.efi_sys_tbl		= mach_bp->efi_sys_tbl;
+ 	
+-	printk("ATV: fixup efi memmap\n");
++	print("ATV: fixup efi memmap\n");
+ 	quirk_fixup_efi_memmap(bp);
+ 	//
+ 	// Now that we have EFI memory map, convert it to E820 map
+ 	//	and update the bootparam accordingly
+-	printk("ATV: converting EFI memmap -> e820 memmap\n");
++	print("ATV: converting EFI memmap -> e820 memmap\n");
+ 	fill_e820map(bp);
+ 	//
+ 	//print_e820_memory_map(bp);
+@@ -263,7 +262,7 @@
+ 	
+ 	efi_system_table_t	*system_table;
+ 	efi_config_table_t	*config_tables;
+-	int					i, num_config_tables;
++	int			i, num_config_tables;
+ 	efi_linux_table		efi;
+ 	
+ 	system_table		= (efi_system_table_t*)mach_bp->efi_sys_tbl;
+@@ -274,44 +273,80 @@
+ 	for (i = 0; i < num_config_tables; i++) {
+ 		if (efi_guidcmp(config_tables[i].guid, MPS_TABLE_GUID) == 0) {
+ 			efi.mps = (void*)config_tables[i].table;
+-			//printk(" MPS=0x%lx ", config_tables[i].table);
++			//print(" MPS=0x%lx ", config_tables[i].table);
+ 			//
+ 		} else if (efi_guidcmp(config_tables[i].guid, ACPI_20_TABLE_GUID) == 0) {
+ 			efi.acpi20 = (void*)config_tables[i].table;
+-			//printk(" ACPI 2.0=0x%lx ", config_tables[i].table);
++			//print(" ACPI 2.0=0x%lx ", config_tables[i].table);
+ 			//
+ 		} else if (efi_guidcmp(config_tables[i].guid, ACPI_TABLE_GUID) == 0) {
+ 			efi.acpi = (void*)config_tables[i].table;
+-			//printk(" ACPI=0x%lx ", config_tables[i].table);
++			//print(" ACPI=0x%lx ", config_tables[i].table);
+ 			//
+ 		} else if (efi_guidcmp(config_tables[i].guid, SMBIOS_TABLE_GUID) == 0) {
+ 			efi.smbios = (void*) config_tables[i].table;
+-			//printk(" SMBIOS=0x%lx ", config_tables[i].table);
++			//print(" SMBIOS=0x%lx ", config_tables[i].table);
+ 			//
+ 		} else if (efi_guidcmp(config_tables[i].guid, HCDP_TABLE_GUID) == 0) {
+ 			efi.hcdp = (void*)config_tables[i].table;
+-			//printk(" HCDP=0x%lx ", config_tables[i].table);
++			//print(" HCDP=0x%lx ", config_tables[i].table);
+ 			//
+ 		} else if (efi_guidcmp(config_tables[i].guid, UGA_IO_PROTOCOL_GUID) == 0) {
+ 			efi.uga = (void*)config_tables[i].table;
+-			//printk(" UGA=0x%lx ", config_tables[i].table);
++			//print(" UGA=0x%lx ", config_tables[i].table);
+ 		}
+ 	}
+-	//printk("\n");
++	//print("\n");
+ 
++	// This is the original EFI memory map as passed by EFI firmware (low mem are only)
++	//mem00: type=EFI_CONVENTIONAL_MEMORY,  attr=0xf, range=[0x00000000-0x0008f000)
++	//mem01: type=EFI_ACPI_MEMORY_NVS,      attr=0xf, range=[0x0008f000-0x00090000)
++	//mem02: type=EFI_CONVENTIONAL_MEMORY,  attr=0xf, range=[0x00090000-0x000a0000)
++	//mem36: type=EFI_RESERVED_TYPE,        attr=0x0, range=[0x000a0000-0x000c0000)
++	//mem03: type=EFI_CONVENTIONAL_MEMORY,  attr=0xf, range=[0x000c0000-0x0b000000)
++	
++	// During EFI mem map to E820 mem map convertion we change this to 
++	// BIOS-e820: 0000000000000800 - 000000000008f000 (usable)
++	// BIOS-e820: 000000000008f000 - 0000000000090000 (ACPI NVS)
++	// BIOS-e820: 0000000000090000 - 00000000000a0000 (usable)
++	// BIOS-e820: 0000000000100000 - 00000000025ae000 (usable)
++
++	uint8_t *tmp_bios_addr; 
++	
++	//tmp_bios_addr = (uint8_t*)0;
++	tmp_bios_addr = (uint8_t*)high_ext_mem;
++	memset(tmp_bios_addr, 0, 1024 * 1024);
++
++	// We need at copy the RSDP down low so linux can find it
++	// copy RSDP table entry from efi location to low mem location
+ 	// rsdp_low_mem is unsigned long so alignment below works
+-	unsigned long		rsdp_low_mem   = 0xF8000;
+-	unsigned long		smbios_low_mem = 0xF8100;
++	unsigned long		rsdp_low_mem   = 0x000F8000;
+ 	//
+-	printk("ATV: clone ACPI entry to %lx...\n", rsdp_low_mem);
+-	// We need at copy the RSDP down low so linux can find it
+-	// copy RSDP table entry from efi location to low mem location
+-	memcpy((void*)rsdp_low_mem, efi.acpi20, sizeof(acpi_rsdp_t) );
++	print("ATV: clone ACPI entry to %lx...\n", rsdp_low_mem);
++	memcpy((void*)(tmp_bios_addr + rsdp_low_mem), efi.acpi20, sizeof(acpi_rsdp_t) );
+ 
+-	printk("ATV: clone SMBIOS entry to %lx...\n", smbios_low_mem);
+ 	// We need at copy the SMBIOS Table Entry Point down low so linux can find it
+ 	// copy SMBIOS Table Entry Point from efi location to low mem location
+-	memcpy((void*)smbios_low_mem, efi.smbios, sizeof(smbios_entry_t) );
++	unsigned long		smbios_low_mem = 0x000F8100;
++	//
++	print("ATV: clone SMBIOS entry to %lx...\n", smbios_low_mem);
++	memcpy((void*)(tmp_bios_addr + smbios_low_mem), efi.smbios, sizeof(smbios_entry_t) );
++
++	// We need to copy the nvidia vbios to where linux can find it
++	unsigned long		vbios_low_mem  = 0x000C0000;
++	// nvidia 7300 (N46) vbios location (1st bar + 0x00700000);
++	unsigned long		vbios_pci_mem  = 0x21000000 + 0x00700000;
++	//
++        print("ATV: copy nvidia vbios to %lx...\n", vbios_low_mem );
++	memcpy((void*)(tmp_bios_addr + vbios_low_mem), (void*)vbios_pci_mem, 0x10000);
++	//
++	print("ATV: calling vga_init in 10 seconds...\n");
++	sleep(10);
++	vga_init(bp, tmp_bios_addr);
++	print("ATV: vgainit is done.\n");
++	sleep(10);
++	
++
+ 	return(0);
+ }
+ 
+Index: utils.c
+===================================================================
+--- utils.c	(revision 238)
++++ utils.c	(working copy)
+@@ -271,3 +271,24 @@
+ 		if ((res = *su1 - *su2) != 0) break;
+ 	return res;
+ }
++/**********************************************************************/
++void* memmove(void *dest, const void *src, size_t count)
++{
++	char *tmp, *s;
++
++	if (dest <= src) {
++		tmp = (char *) dest;
++		s = (char *) src;
++		while (count--)
++			*tmp++ = *s++;
++		}
++	else {
++		tmp = (char *) dest + count;
++		s = (char *) src + count;
++		while (count--)
++			*--tmp = *--s;
++		}
++
++	return dest;
++}
++
+Index: console.c
+===================================================================
+--- console.c	(revision 238)
++++ console.c	(working copy)
+@@ -15,6 +15,10 @@
+ #include "types.h"
+ #include "darwin_code.h"
+ 
++int	safe_to_use_bios = 0;
++int	safe_to_use_vesa = 1;
++static void	bios_write_string(char *s);
++
+ const unsigned short waStarts[] = {
+  0, 4, 12, 20, 29, 42, 53, 56, // <-- (
+  62, 67, 73, 81, 85, 91, 95, 100, // <-- 0
+@@ -433,6 +437,7 @@
+ 
+ #define WIDTH_SPACE_PIXELS 5
+ 
++/*---------------------------------------------------------------------------*/
+ // returns number of x pixels taken up by ascii character bCharacter
+ unsigned int BootVideoGetCharacterWidth(u8 bCharacter, bool fDouble)
+ {
+@@ -452,6 +457,7 @@
+ 	if(fDouble) return nWidth<<1; else return nWidth;
+ }
+ 
++/*---------------------------------------------------------------------------*/
+ // returns number of x pixels taken up by string
+ unsigned int BootVideoGetStringTotalWidth(const char * szc) {
+ 	unsigned int nWidth=0;
+@@ -467,6 +473,7 @@
+ 	return nWidth;
+ }
+ 
++/*---------------------------------------------------------------------------*/
+ // convert pixel count to size of memory in bytes required to hold it, given the character height
+ // usable for direct write or for prebuffered write
+ // returns width of character in pixels
+@@ -546,6 +553,7 @@
+ 	return nWidth;
+ }
+ 
++/*---------------------------------------------------------------------------*/
+ // usable for direct write or for prebuffered write
+ // returns width of string in pixels
+ int BootVideoOverlayString(u32 * pdwaTopLeftDestination, u32 m_dwCountBytesPerLineDestination, RGBA rgbaOpaqueness, const char * szString)
+@@ -565,6 +573,7 @@
+ 	return uiWidth;
+ }
+ 
++/*---------------------------------------------------------------------------*/
+ void BootVideoChunkedPrint(const char * szBuffer) {
+ 	int n=0;
+ 	int nDone=0;
+@@ -599,9 +608,10 @@
+ 
+ }
+ 
+-int printk(const char *szFormat, ...) {  // printk displays to video
++/*---------------------------------------------------------------------------*/
++int print(const char *szFormat, ...) {  // printk displays to video
+ 	char		szBuffer[512*2];
+-	u16			wLength=0;
++	u16		wLength=0;
+ 	va_list		argList;
+ 	
+ 	va_start(argList, szFormat);
+@@ -612,20 +622,56 @@
+         if (wLength>(sizeof(szBuffer)-1)) wLength = sizeof(szBuffer)-1;
+ 	szBuffer[wLength]='\0';
+ 	        
+-	BootVideoChunkedPrint(szBuffer);
++	if (safe_to_use_vesa) {
++		BootVideoChunkedPrint(szBuffer);
++	}
++	if (safe_to_use_bios) {
++		bios_write_string(szBuffer);
++	}
++	
+ 	return wLength;
+ }
+ 
++/*---------------------------------------------------------------------------*/
+ int console_putchar(int c)
+ {
+ 	char buf[2];
+ 	buf[0] = (char)c;
+ 	buf[1] = 0;
+-	BootVideoChunkedPrint(buf);
++	
++	if (safe_to_use_vesa) {
++		BootVideoChunkedPrint(buf);
++	}
++	if (safe_to_use_bios) {
++		bios_write_string(buf);
++	}
++	
+ 	return (int)buf[0];	
+ }
+ 
++/*---------------------------------------------------------------------------*/
+ int putchar(int c)
+ {
+ 	return console_putchar(c);
+ }
++
++/*---------------------------------------------------------------------------*/
++// from elilo-vga-0.1.tar.gz - vga/util.c
++// GPL v2
++// Copyright (c) 2006 James McKenzie <james@fishsoup.dhs.org>
++static void
++bios_write_string(char *s)
++{
++	if (!safe_to_use_bios)
++		return;
++
++	safe_to_use_bios = 0;
++	while (*s) {
++		if (*s == '\n') {
++			bios_write_char('\r');
++		}
++		bios_write_char(*s);
++		s++;
++	}
++	safe_to_use_bios = 1;
++}
+Index: utils.h
+===================================================================
+--- utils.h	(revision 238)
++++ utils.h	(working copy)
+@@ -5,17 +5,19 @@
+ 
+ void	msleep(int s);
+ void	sleep(int s);
+-int		mseconds(void);
+-int		seconds(void);
++int	mseconds(void);
++int	seconds(void);
+ //
+ char*	strcpy(char *dest, const char *src);
+ char*	strncpy(char *dest, const char *src, size_t count);
+-int		strncmp(const char *cs, const char *ct, size_t count);
++int	strncmp(const char *cs, const char *ct, size_t count);
+ char*	strcat(char * dest, const char * src);
+ char*	strstr(const char * s1,const char * s2);
+ size_t	strlen(const char *s);
+ void*	memcpy(void * to, const void *from, size_t n);
+ void*	memset(void *s, int c,  size_t count);
+-int		memcmp(const void *cs, const void *ct, size_t count);
++int	memcmp(const void *cs, const void *ct, size_t count);
++void*	memmove(void *dest, const void *src, size_t count);
+ 
++
+ #endif
+Index: vgabios/int15.c
+===================================================================
+--- vgabios/int15.c	(revision 0)
++++ vgabios/int15.c	(revision 0)
+@@ -0,0 +1,12 @@
++#include <stdio.h>
++#include "test.h"
++
++void x86emu_dump_xregs();
++
++int int15_handler(void)
++{
++	printf("\nint15 encountered.\n");
++	//x86emu_dump_xregs();
++	X86_EAX = 0;
++	return 1;
++}
+Index: vgabios/int16.c
+===================================================================
+--- vgabios/int16.c	(revision 0)
++++ vgabios/int16.c	(revision 0)
+@@ -0,0 +1,7 @@
++#include <stdio.h>
++
++int int16_handler(void)
++{
++	printf("\nint16: keyboard not supported right now.\n");
++	return 1;
++}
+Index: vgabios/pci-userspace.c
+===================================================================
+--- vgabios/pci-userspace.c	(revision 0)
++++ vgabios/pci-userspace.c	(revision 0)
+@@ -0,0 +1,160 @@
++#include "../types.h"
++
++#include "pci.h"
++#include "sys_pci.h"
++
++#define PCITAG struct pci_filter *
++
++#define DEBUG_PCI 1
++
++struct pci_access *pacc;
++struct pci_dev *dev;
++
++struct pci_filter ltag;
++
++
++
++int pciNumBuses = 0;
++
++int pciInit(void)
++{
++	pacc = pci_alloc();
++
++	pci_init(pacc);
++	pci_scan_bus(pacc);
++	for (dev = pacc->devices; dev; dev = dev->next) {
++		pci_fill_info(dev, PCI_FILL_IDENT | PCI_FILL_BASES);
++	}
++	return 0;
++}
++
++int pciExit(void)
++{
++	pci_cleanup(pacc);
++	return 0;
++}
++
++PCITAG findPci(unsigned short bx)
++{
++	PCITAG tag = &ltag;
++
++	int bus = (bx >> 8) & 0xFF;
++	int slot = (bx >> 3) & 0x1F;
++	int func = bx & 0x7;
++
++	tag->bus = bus;
++	tag->slot = slot;
++	tag->func = func;
++
++#if LIBPCI_CHECK_VERSION(2,1,99)
++	if (pci_get_dev(pacc, 0, bus, slot, func))
++#else
++	if (pci_get_dev(pacc, bus, slot, func))
++#endif
++		return tag;
++
++	return NULL;
++}
++
++u32 pciSlotBX(PCITAG tag)
++{
++	return (tag->bus << 8) | (tag->slot << 3) | (tag->func);
++}
++
++u8 pciReadByte(PCITAG tag, u32 idx)
++{
++	struct pci_dev *d;
++#if LIBPCI_CHECK_VERSION(2,1,99)
++	if ((d = pci_get_dev(pacc, 0, tag->bus, tag->slot, tag->func)))
++#else
++	if ((d = pci_get_dev(pacc, tag->bus, tag->slot, tag->func)))
++#endif
++		return pci_read_byte(d, idx);
++#ifdef DEBUG_PCI
++	printf("PCI: device not found while read byte (%x:%x.%x)\n",
++	       tag->bus, tag->slot, tag->func);
++#endif
++	return 0;
++}
++
++u16 pciReadWord(PCITAG tag, u32 idx)
++{
++	struct pci_dev *d;
++#if LIBPCI_CHECK_VERSION(2,1,99)
++	if ((d = pci_get_dev(pacc, 0, tag->bus, tag->slot, tag->func)))
++#else
++	if ((d = pci_get_dev(pacc, tag->bus, tag->slot, tag->func)))
++#endif
++		return pci_read_word(d, idx);
++#ifdef DEBUG_PCI
++	printf("PCI: device not found while read word (%x:%x.%x)\n",
++	       tag->bus, tag->slot, tag->func);
++#endif
++	return 0;
++}
++
++u32 pciReadLong(PCITAG tag, u32 idx)
++{
++	struct pci_dev *d;
++#if LIBPCI_CHECK_VERSION(2,1,99)
++	if ((d = pci_get_dev(pacc, 0, tag->bus, tag->slot, tag->func)))
++#else
++	if ((d = pci_get_dev(pacc, tag->bus, tag->slot, tag->func)))
++#endif
++		return pci_read_long(d, idx);
++#ifdef DEBUG_PCI
++	printf("PCI: device not found while read long (%x:%x.%x)\n",
++	       tag->bus, tag->slot, tag->func);
++#endif
++	return 0;
++}
++
++
++void pciWriteLong(PCITAG tag, u32 idx, u32 data)
++{
++	struct pci_dev *d;
++#if LIBPCI_CHECK_VERSION(2,1,99)
++	if ((d = pci_get_dev(pacc, 0, tag->bus, tag->slot, tag->func)))
++#else
++	if ((d = pci_get_dev(pacc, tag->bus, tag->slot, tag->func)))
++#endif
++		pci_write_long(d, idx, data);
++#ifdef DEBUG_PCI
++	else
++		printf("PCI: device not found while write long (%x:%x.%x)\n",
++		       tag->bus, tag->slot, tag->func);
++#endif
++}
++
++void pciWriteWord(PCITAG tag, u32 idx, u16 data)
++{
++	struct pci_dev *d;
++#if LIBPCI_CHECK_VERSION(2,1,99)
++	if ((d = pci_get_dev(pacc, 0, tag->bus, tag->slot, tag->func)))
++#else
++	if ((d = pci_get_dev(pacc, tag->bus, tag->slot, tag->func)))
++#endif
++		pci_write_word(d, idx, data);
++#ifdef DEBUG_PCI
++	else
++		printf("PCI: device not found while write word (%x:%x.%x)\n",
++		       tag->bus, tag->slot, tag->func);
++#endif
++
++}
++
++void pciWriteByte(PCITAG tag, u32 idx, u8 data)
++{
++	struct pci_dev *d;
++#if LIBPCI_CHECK_VERSION(2,1,99)
++	if ((d = pci_get_dev(pacc, 0, tag->bus, tag->slot, tag->func)))
++#else
++	if ((d = pci_get_dev(pacc, tag->bus, tag->slot, tag->func)))
++#endif
++		pci_write_long(d, idx, data);
++#ifdef DEBUG_PCI
++	else
++		printf("PCI: device not found while write long (%x:%x.%x)\n",
++		       tag->bus, tag->slot, tag->func);
++#endif
++}
+Index: vgabios/pci-userspace.h
+===================================================================
+--- vgabios/pci-userspace.h	(revision 0)
++++ vgabios/pci-userspace.h	(revision 0)
+@@ -0,0 +1,57 @@
++#include "../types.h"
++
++#include "pci.h"
++
++typedef unsigned long pciaddr_t;
++typedef u8 byte;
++typedef u16 word;
++
++struct pci_dev {
++	struct pci_dev *next;	/* Next device in the chain */
++	word bus;		/* Higher byte can select host bridges */
++	byte dev, func;		/* Device and function */
++
++	/* These fields are set by pci_fill_info() */
++	int known_fields;	/* Set of info fields already known */
++	word vendor_id, device_id;	/* Identity of the device */
++	int irq;		/* IRQ number */
++	pciaddr_t base_addr[6];	/* Base addresses */
++	pciaddr_t size[6];	/* Region sizes */
++	pciaddr_t rom_base_addr;	/* Expansion ROM base address */
++	pciaddr_t rom_size;	/* Expansion ROM size */
++
++	/* Fields used internally: */
++	void *access;
++	void *methods;
++	byte *cache;		/* Cached information */
++	int cache_len;
++	int hdrtype;		/* Direct methods: header type */
++	void *aux;		/* Auxillary data */
++};
++
++
++struct pci_filter {
++	int bus, slot, func;	/* -1 = ANY */
++	int vendor, device;
++};
++
++
++#define PCITAG struct pci_filter *
++#define pciVideoPtr struct pci_dev *
++
++extern int pciNumBuses;
++
++int pciInit(void);
++int pciExit(void);
++
++
++PCITAG findPci(unsigned short bx);
++u32 pciSlotBX(pciVideoPtr pvp);
++
++void pciWriteLong(PCITAG tag, u32 idx, u32 data);
++void pciWriteWord(PCITAG tag, u32 idx, u16 data);
++void pciWriteByte(PCITAG tag, u32 idx, u8 data);
++
++u32 pciReadLong(PCITAG tag, u32 idx);
++u16 pciReadWord(PCITAG tag, u32 idx);
++u8 pciReadByte(PCITAG tag, u32 idx);
+Index: vgabios/sys_pci.c
+===================================================================
+--- vgabios/sys_pci.c	(revision 0)
++++ vgabios/sys_pci.c	(revision 0)
+@@ -0,0 +1,55 @@
++/*
++ * pci.h:
++ *
++ * Copyright (c) 2006 James McKenzie <james@fishsoup.dhs.org>,
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ *
++ */
++
++#include "sys_pci.h"
++#include "sys_io.h"
++
++/* PCI config read/write */
++unsigned char
++conf1_read_8(int bus, int devfn, int off)
++{
++  int addr = 0xcfc + (off & 3);
++  outl(0x80000000 | (bus << 16) | (devfn << 8) | (off & ~3), 0x0cf8);
++  return inb(addr);
++}
++
++unsigned short
++conf1_read_16(int bus, int devfn, int off)
++{
++  int addr = 0xcfc + (off & 3);
++  outl(0x80000000 | (bus << 16) | (devfn << 8) | (off & ~3), 0x0cf8);
++  return inw(addr);
++}
++
++unsigned long
++conf1_read_32(int bus, int devfn, int off)
++{
++  int addr = 0xcfc + (off & 3);
++  outl(0x80000000 | (bus << 16) | (devfn << 8) | (off & ~3), 0x0cf8);
++  return inl(addr);
++}
++
++void
++conf1_write_8(int bus, int devfn, int off, unsigned char val)
++{
++  int addr = 0xcfc + (off & 3);
++  outl(0x80000000 | (bus << 16) | (devfn << 8) | (off & ~3), 0x0cf8);
++  outb(val, addr);
++}
+Index: vgabios/sys_io.h
+===================================================================
+--- vgabios/sys_io.h	(revision 0)
++++ vgabios/sys_io.h	(revision 0)
+@@ -0,0 +1,39 @@
++#ifndef __SYS_IO_H__
++#define __SYS_IO_H__
++
++/* IO port input/output */
++
++static inline void outb(unsigned char value, unsigned short port) {
++    __asm__ __volatile__ ("out" "b" " %" "b" "0,%" "w" "1"::"a" (value),
++            "Nd" (port));
++}
++
++static inline void outw(unsigned short value, unsigned short port) {
++    __asm__ __volatile__ ("out" "w" " %" "w" "0,%" "w" "1"::"a" (value),
++            "Nd" (port));
++}
++
++static inline void outl(unsigned long value, unsigned short port) {
++    __asm__ __volatile__ ("out" "l" " %" "0,%" "w" "1"::"a" (value),
++            "Nd" (port));
++}
++
++static inline unsigned char inb(unsigned short port) {
++    unsigned char _v;
++    __asm__ __volatile__ ("in" "b" " %" "w" "1,%" "" "0":"=a" (_v):"Nd" (port));
++    return _v;
++}
++
++static inline unsigned short inw(unsigned short port) {
++    unsigned short _v;
++    __asm__ __volatile__ ("in" "w" " %" "w" "1,%" "" "0":"=a" (_v):"Nd" (port));
++    return _v;
++}
++
++static inline unsigned long inl(unsigned short port) {
++    unsigned long _v;
++    __asm__ __volatile__ ("in" "l" " %" "w" "1,%" "" "0":"=a" (_v):"Nd" (port));
++    return _v;
++}
++
++#endif /* __SYS_IO_H__ */
+Index: vgabios/int1a.c
+===================================================================
+--- vgabios/int1a.c	(revision 0)
++++ vgabios/int1a.c	(revision 0)
+@@ -0,0 +1,172 @@
++//#include <stdio.h>
++#include "test.h"
++#include "pci-userspace.h"
++
++#define DEBUG_INT1A
++
++#define SUCCESSFUL              0x00
++#define DEVICE_NOT_FOUND        0x86
++#define BAD_REGISTER_NUMBER     0x87
++
++void x86emu_dump_xregs(void);
++extern int verbose;
++
++
++int int1A_handler()
++{
++	PCITAG tag;
++	pciVideoPtr pvp = NULL;
++
++	if (verbose) {
++		printf("\nint1a encountered.\n");
++		//x86emu_dump_xregs();
++	}
++
++	switch (X86_AX) {
++	case 0xb101:
++		X86_EAX = 0x00;	/* no config space/special cycle support */
++		X86_AL = 0x01;	/* config mechanism 1 */
++		X86_EDX = 0x20494350;	/* " ICP" */
++		X86_EBX = 0x0210;	/* Version 2.10 */
++		X86_ECX &= 0xFF00;
++		X86_ECX |= (pciNumBuses & 0xFF);	/* Max bus number in system */
++		X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++#ifdef DEBUG_INT1A
++		if (verbose)
++			printf("PCI bios present.\n");
++#endif
++		return 1;
++	case 0xb102:
++		if (X86_DX == pvp->vendor_id && X86_CX == pvp->device_id && X86_ESI == 0) {
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++			X86_EBX = pciSlotBX(pvp);
++		}
++#ifdef SHOW_ALL_DEVICES
++		else if ((pvp = xf86FindPciDeviceVendor(X86_EDX, X86_ECX, X86_ESI, pvp))) {
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++			X86_EBX = pciSlotBX(pvp);
++		}
++#endif
++		else {
++			X86_EAX = X86_AL | (DEVICE_NOT_FOUND << 8);
++			X86_EFLAGS |= ((unsigned long) 0x01);	/* set carry flag */
++		}
++#ifdef DEBUG_INT1A
++		printf("eax=0x%x ebx=0x%x eflags=0x%x\n", X86_EAX, X86_EBX, X86_EFLAGS);
++#endif
++		return 1;
++	case 0xb103:
++#if 0
++		if (X86_CL == pvp->interface &&
++		    X86_CH == pvp->subclass &&
++		    ((X86_ECX & 0xFFFF0000) >> 16) == pvp->class) {
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EBX = pciSlotBX(pvp);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++		}
++#else
++		/* FIXME: dirty hack */
++		if (0);
++#endif
++#ifdef SHOW_ALL_DEVICES
++		else if ((pvp = FindPciClass(X86_CL, X86_CH,
++					     (X86_ECX & 0xffff0000) >> 16,
++					     X86_ESI, pvp))) {
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++			X86_EBX = pciSlotBX(pvp);
++		}
++#endif
++		else {
++			X86_EAX = X86_AL | (DEVICE_NOT_FOUND << 8);
++			X86_EFLAGS |= ((unsigned long) 0x01);	/* set carry flag */
++		}
++#ifdef DEBUG_INT1A
++		printf("eax=0x%x eflags=0x%x\n", X86_EAX, X86_EFLAGS);
++#endif
++		return 1;
++	case 0xb108:
++		if ((tag = findPci(X86_EBX))) {
++			X86_CL = pciReadByte(tag, X86_EDI);
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++		} else {
++			X86_EAX = X86_AL | (BAD_REGISTER_NUMBER << 8);
++			X86_EFLAGS |= ((unsigned long) 0x01);	/* set carry flag */
++		}
++#ifdef DEBUG_INT1A
++		printf("eax=0x%x ecx=0x%x eflags=0x%x\n", X86_EAX, X86_ECX, X86_EFLAGS);
++#endif
++		return 1;
++	case 0xb109:
++		if ((tag = findPci(X86_EBX))) {
++			X86_CX = pciReadWord(tag, X86_EDI);
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++		} else {
++			X86_EAX = X86_AL | (BAD_REGISTER_NUMBER << 8);
++			X86_EFLAGS |= ((unsigned long) 0x01);	/* set carry flag */
++		}
++#ifdef DEBUG_INT1A
++		printf("eax=0x%x ecx=0x%x eflags=0x%x\n", X86_EAX, X86_ECX, X86_EFLAGS);
++#endif
++		return 1;
++	case 0xb10a:
++		if ((tag = findPci(X86_EBX))) {
++			X86_ECX = pciReadLong(tag, X86_EDI);
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++		} else {
++			X86_EAX = X86_AL | (BAD_REGISTER_NUMBER << 8);
++			X86_EFLAGS |= ((unsigned long) 0x01);	/* set carry flag */
++		}
++#ifdef DEBUG_INT1A
++		printf("eax=0x%x ecx=0x%x eflags=0x%x\n", X86_EAX, X86_ECX, X86_EFLAGS);
++#endif
++		return 1;
++	case 0xb10b:
++		if ((tag = findPci(X86_EBX))) {
++			pciWriteByte(tag, X86_EDI, X86_CL);
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++		} else {
++			X86_EAX = X86_AL | (BAD_REGISTER_NUMBER << 8);
++			X86_EFLAGS |= ((unsigned long) 0x01);	/* set carry flag */
++		}
++#ifdef DEBUG_INT1A
++		printf("eax=0x%x eflags=0x%x\n", X86_EAX, X86_EFLAGS);
++#endif
++		return 1;
++	case 0xb10c:
++		if ((tag = findPci(X86_EBX))) {
++			pciWriteWord(tag, X86_EDI, X86_CX);
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++		} else {
++			X86_EAX = X86_AL | (BAD_REGISTER_NUMBER << 8);
++			X86_EFLAGS |= ((unsigned long) 0x01);	/* set carry flag */
++		}
++#ifdef DEBUG_INT1A
++		printf("eax=0x%x eflags=0x%x\n", X86_EAX, X86_EFLAGS);
++#endif
++		return 1;
++	case 0xb10d:
++		if ((tag = findPci(X86_EBX))) {
++			pciWriteLong(tag, X86_EDI, X86_ECX);
++			X86_EAX = X86_AL | (SUCCESSFUL << 8);
++			X86_EFLAGS &= ~((unsigned long) 0x01);	/* clear carry flag */
++		} else {
++			X86_EAX = X86_AL | (BAD_REGISTER_NUMBER << 8);
++			X86_EFLAGS |= ((unsigned long) 0x01);	/* set carry flag */
++		}
++#ifdef DEBUG_INT1A
++		printf("eax=0x%x eflags=0x%x\n", X86_EAX, X86_EFLAGS);
++#endif
++		return 1;
++	default:
++		printf("int1a: subfunction not implemented.\n");
++		return 0;
++	}
++}
+Index: vgabios/README
+===================================================================
+--- vgabios/README	(revision 0)
++++ vgabios/README	(revision 0)
+@@ -0,0 +1,32 @@
++James Mckenzie, May 2006.
++
++This is a horrible hack.
++
++Just before elilo calls into the kernel it calls vga_init
++and passes a pointer to the kernels parameter table.
++
++vga_init does the following:
++
++1) search through the RAM (from the compressed EFI firmware rom)
++   for the intel VGA bios.
++2) setup a real mode x86 emulator and copy the rom into 0xc0000 in 
++   the emulator, trap all the interrupt vectors in the emulator
++   to stop the VGA bios trying to call the system bios.
++3) execute the VGA bios rom. The VGA bios rom reads the EDID information
++   from the monitor and modifies! itself.
++4) tell the ICH7 chipset to map RW memory at 0xc0000, and to point 
++   0xa0000 to the video card.
++5) copy the interrupt vectors (specifically int 0x10), the BIOS parameter 
++   table, and the ROM from the emulator into real memory.
++6) in the emulator execute code equivalent to the linux kernel's video.S
++   and set the boot parameters accordingly
++7) transfer control back to the kernel.
++
++Thanks to Matthew Garrett, whose work with vbetool this 
++builds on.
++
++To get this to work, you need to apply the patches in the patches directory.
++The first to elilo which links this code in, and the second to the kernel
++which tells it to use the legacy VGA mode even in the presence of EFI.
++
++
+Index: vgabios/helper_mem.c
+===================================================================
+--- vgabios/helper_mem.c	(revision 0)
++++ vgabios/helper_mem.c	(revision 0)
+@@ -0,0 +1,311 @@
++/* $XFree86: xc/programs/Xserver/hw/xfree86/int10/helper_mem.c,v 1.21 2001/05/22 16:24:37 tsi Exp $ */
++/*
++ *                   XFree86 int10 module
++ *   execute BIOS int 10h calls in x86 real mode environment
++ *                 Copyright 1999 Egbert Eich
++ */
++#define _INT10_PRIVATE
++
++#define REG pInt
++#if 0
++typedef enum {
++	OPT_NOINT10,
++	OPT_INIT_PRIMARY,
++	OPT_BIOS_LOCATION
++} INT10Opts;
++
++static const OptionInfoRec INT10Options[] = {
++	{OPT_NOINT10, "NoINT10", OPTV_BOOLEAN, {0}, FALSE},
++	{OPT_INIT_PRIMARY, "InitPrimary", OPTV_BOOLEAN, {0}, FALSE},
++	{OPT_BIOS_LOCATION, "BiosLocation", OPTV_STRING, {0}, FALSE},
++	{-1, NULL, OPTV_NONE, {0}, FALSE},
++};
++#endif
++
++#ifdef DEBUG
++void dprint(unsigned long start, unsigned long size)
++{
++	int i, j;
++	char *c = (char *) start;
++
++	for (j = 0; j < (size >> 4); j++) {
++		char *d = c;
++		printf("\n0x%lx:  ", (unsigned long) c);
++		for (i = 0; i < 16; i++)
++			printf("%2.2x ", (unsigned char) (*(c++)));
++		c = d;
++		for (i = 0; i < 16; i++) {
++			printf("%c", ((((u8) (*c)) > 32) && (((u8) (*c)) < 128)) ?
++			       (unsigned char) (*(c)) : '.');
++			c++;
++		}
++	}
++	printf("\n");
++}
++#endif /* DEBUG */
++
++#if 0
++#ifndef _PC
++/*
++ * here we are really paranoid about faking a "real"
++ * BIOS. Most of this information was pulled from
++ * dosemu.
++ */
++void setup_int_vect(void)
++{
++	int i;
++
++	/* let the int vects point to the SYS_BIOS seg */
++	for (i = 0; i < 0x80; i++) {
++		MEM_WW(i << 2, 0);
++		MEM_WW((i << 2) + 2, SYS_BIOS >> 4);
++	}
++
++	reset_int_vect(current);
++	/* font tables default location (int 1F) */
++	MEM_WW(0x1f << 2, 0xfa6e);
++
++	/* int 11 default location (Get Equipment Configuration) */
++	MEM_WW(0x11 << 2, 0xf84d);
++	/* int 12 default location (Get Conventional Memory Size) */
++	MEM_WW(0x12 << 2, 0xf841);
++	/* int 15 default location (I/O System Extensions) */
++	MEM_WW(0x15 << 2, 0xf859);
++	/* int 1A default location (RTC, PCI and others) */
++	MEM_WW(0x1a << 2, 0xff6e);
++	/* int 05 default location (Bound Exceeded) */
++	MEM_WW(0x05 << 2, 0xff54);
++	/* int 08 default location (Double Fault) */
++	MEM_WW(0x08 << 2, 0xfea5);
++	/* int 13 default location (Disk) */
++	MEM_WW(0x13 << 2, 0xec59);
++	/* int 0E default location (Page Fault) */
++	MEM_WW(0x0e << 2, 0xef57);
++	/* int 17 default location (Parallel Port) */
++	MEM_WW(0x17 << 2, 0xefd2);
++	/* fdd table default location (int 1e) */
++	MEM_WW(0x1e << 2, 0xefc7);
++
++	/* Set Equipment flag to VGA */
++	i = MEM_RB(0x0410) & 0xCF;
++	MEM_WB(0x0410, i);
++	/* XXX Perhaps setup more of the BDA here.  See also int42(0x00). */
++}
++#endif
++
++int setup_system_bios(void *base_addr)
++{
++	char *base = (char *) base_addr;
++
++	/*
++	 * we trap the "industry standard entry points" to the BIOS
++	 * and all other locations by filling them with "hlt"
++	 * TODO: implement hlt-handler for these
++	 */
++	memset(base, 0xf4, 0x10000);
++
++	/* set bios date */
++	strcpy(base + 0x0FFF5, "06/11/99");
++	/* set up eisa ident string */
++	strcpy(base + 0x0FFD9, "PCI_ISA");
++	/* write system model id for IBM-AT */
++	*((unsigned char *) (base + 0x0FFFE)) = 0xfc;
++
++	return 1;
++}
++
++void reset_int_vect(void)
++{
++	/*
++	 * This table is normally located at 0xF000:0xF0A4.  However, int 0x42,
++	 * function 0 (Mode Set) expects it (or a copy) somewhere in the bottom
++	 * 64kB.  Note that because this data doesn't survive POST, int 0x42 should
++	 * only be used during EGA/VGA BIOS initialisation.
++	 */
++	static const u8 VideoParms[] = {
++		/* Timing for modes 0x00 & 0x01 */
++		0x38, 0x28, 0x2d, 0x0a, 0x1f, 0x06, 0x19, 0x1c,
++		0x02, 0x07, 0x06, 0x07, 0x00, 0x00, 0x00, 0x00,
++		/* Timing for modes 0x02 & 0x03 */
++		0x71, 0x50, 0x5a, 0x0a, 0x1f, 0x06, 0x19, 0x1c,
++		0x02, 0x07, 0x06, 0x07, 0x00, 0x00, 0x00, 0x00,
++		/* Timing for modes 0x04, 0x05 & 0x06 */
++		0x38, 0x28, 0x2d, 0x0a, 0x7f, 0x06, 0x64, 0x70,
++		0x02, 0x01, 0x06, 0x07, 0x00, 0x00, 0x00, 0x00,
++		/* Timing for mode 0x07 */
++		0x61, 0x50, 0x52, 0x0f, 0x19, 0x06, 0x19, 0x19,
++		0x02, 0x0d, 0x0b, 0x0c, 0x00, 0x00, 0x00, 0x00,
++		/* Display page lengths in little endian order */
++		0x00, 0x08,	/* Modes 0x00 and 0x01 */
++		0x00, 0x10,	/* Modes 0x02 and 0x03 */
++		0x00, 0x40,	/* Modes 0x04 and 0x05 */
++		0x00, 0x40,	/* Modes 0x06 and 0x07 */
++		/* Number of columns for each mode */
++		40, 40, 80, 80, 40, 40, 80, 80,
++		/* CGA Mode register value for each mode */
++		0x2c, 0x28, 0x2d, 0x29, 0x2a, 0x2e, 0x1e, 0x29,
++		/* Padding */
++		0x00, 0x00, 0x00, 0x00
++	};
++	int i;
++
++	for (i = 0; i < sizeof(VideoParms); i++)
++		MEM_WB(i + (0x1000 - sizeof(VideoParms)), VideoParms[i]);
++	MEM_WW(0x1d << 2, 0x1000 - sizeof(VideoParms));
++	MEM_WW((0x1d << 2) + 2, 0);
++
++	printf("SETUP INT\n");
++	MEM_WW(0x10 << 2, 0xf065);
++	MEM_WW((0x10 << 2) + 2, SYS_BIOS >> 4);
++	MEM_WW(0x42 << 2, 0xf065);
++	MEM_WW((0x42 << 2) + 2, SYS_BIOS >> 4);
++	MEM_WW(0x6D << 2, 0xf065);
++	MEM_WW((0x6D << 2) + 2, SYS_BIOS >> 4);
++}
++
++void set_return_trap(void)
++{
++	/*
++	 * Here we set the exit condition:  We return when we encounter
++	 * 'hlt' (=0xf4), which we locate at address 0x600 in x86 memory.
++	 */
++	MEM_WB(0x0600, 0xf4);
++
++	/*
++	 * Allocate a segment for the stack
++	 */
++	xf86Int10AllocPages(1, current->stackseg);
++}
++
++void *xf86HandleInt10Options(ScrnInfoPtr pScrn, int entityIndex)
++{
++	EntityInfoPtr pEnt = xf86GetEntityInfo(entityIndex);
++	OptionInfoPtr options = NULL;
++
++	if (pEnt->device) {
++		pointer configOptions = NULL;
++
++		/* Check if xf86CollectOptions() has already been called */
++		if (((pEnt->index < 0) ||
++		     !xf86Screens[pEnt->index] ||
++		     !(configOptions = xf86Screens[pEnt->index]->options)) &&
++		    pEnt->device)
++			configOptions = pEnt->device->options;
++
++		if (configOptions) {
++			if (!(options = (OptionInfoPtr) xalloc(sizeof(INT10Options))))
++				return NULL;
++
++			(void) memcpy(options, INT10Options, sizeof(INT10Options));
++			xf86ProcessOptions(pScrn->scrnIndex, configOptions, options);
++		}
++	}
++	xfree(pEnt);
++
++	return options;
++}
++
++Bool int10skip(void *options)
++{
++	Bool noint10 = FALSE;
++
++	if (!options)
++		return FALSE;
++
++	xf86GetOptValBool(options, OPT_NOINT10, &noint10);
++	return noint10;
++}
++
++Bool int10_check_bios(int scrnIndex, int codeSeg, unsigned char *vbiosMem)
++{
++	int size;
++
++	if ((codeSeg & 0x1f) ||	/* Not 512-byte aligned otherwise */
++	    ((codeSeg << 4) < V_BIOS) || ((codeSeg << 4) >= SYS_SIZE))
++		return FALSE;
++
++	if (xf86IsPc98())
++		return FALSE;
++
++	if ((*vbiosMem != 0x55) || (*(vbiosMem + 1) != 0xAA) || !*(vbiosMem + 2))
++		return FALSE;
++
++	size = *(vbiosMem + 2) * 512;
++
++	if ((size + (codeSeg << 4)) > SYS_SIZE)
++		return FALSE;
++
++	if (bios_checksum(vbiosMem, size))
++		xf86DrvMsg(scrnIndex, X_WARNING, "Bad V_BIOS checksum\n");
++
++	return TRUE;
++}
++
++Bool initPrimary(void *options)
++{
++	Bool initPrimary = FALSE;
++
++	if (!options)
++		return FALSE;
++
++	xf86GetOptValBool(options, OPT_INIT_PRIMARY, &initPrimary);
++	return initPrimary;
++}
++
++void xf86int10ParseBiosLocation(void *options, xf86int10BiosLocationPtr bios)
++{
++	char *s;
++	char *p;
++	char *str = NULL;
++
++	if (options)
++		str = xf86GetOptValString(options, OPT_BIOS_LOCATION);
++
++	bios->bus = BUS_NONE;
++	if (!str)
++		return;
++
++	s = xstrdup(str);
++	p = strtok(s, ":");
++	if (xf86NameCmp(p, "pci"))
++		bios->bus = BUS_PCI;
++	else if (xf86NameCmp(p, "primary"))
++		bios->bus = BUS_ISA;
++
++	xfree(s);
++
++	if (bios->bus == BUS_NONE)
++		return;
++
++	s = xstrdup(str);
++	p = strchr(s, ':');
++
++	switch (bios->bus) {
++	case BUS_ISA:
++		if (p)
++			bios->location.legacy = atoi(++p);
++		else
++			bios->location.legacy = 0;
++		break;
++	case BUS_PCI:
++		if (p) {
++			bios->location.pci.bus = atoi(++p);
++			if ((p = strchr(p, ':'))) {
++				bios->location.pci.dev = atoi(++p);
++				if ((p = strchr(p, ':'))) {
++					bios->location.pci.func = atoi(++p);
++					break;
++				}
++			}
++		}
++		/* fall through */
++		bios->bus = BUS_NONE;
++		break;
++	default:
++		break;
++	}
++	xfree(s);
++}
++
++
++#endif
+Index: vgabios/sys_pci.h
+===================================================================
+--- vgabios/sys_pci.h	(revision 0)
++++ vgabios/sys_pci.h	(revision 0)
+@@ -0,0 +1,29 @@
++/*
++ * pci.h:
++ *
++ * Copyright (c) 2006 James McKenzie <james@fishsoup.dhs.org>,
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ *
++ */
++
++#ifndef __PCI_H__
++#define __PCI_H__
++
++unsigned char	conf1_read_8( int bus, int devfn, int off);
++unsigned short	conf1_read_16(int bus, int devfn, int off);
++unsigned long	conf1_read_32(int bus, int devfn, int off);
++void		conf1_write_8(int bus, int devfn, int off, unsigned char val);
++
++#endif /* __PCI_H__ */
+Index: vgabios/pci.h
+===================================================================
+--- vgabios/pci.h	(revision 0)
++++ vgabios/pci.h	(revision 0)
+@@ -0,0 +1,2 @@
++void x_outb(u16 port, u8 val);
++#define outb x_outb
+Index: vgabios/helper_exec.c
+===================================================================
+--- vgabios/helper_exec.c	(revision 0)
++++ vgabios/helper_exec.c	(revision 0)
+@@ -0,0 +1,269 @@
++/* $XFree86: xc/programs/Xserver/hw/xfree86/int10/helper_exec.c,v 1.16 2001/04/30 14:34:57 tsi Exp $ */
++/*
++ *                   XFree86 int10 module
++ *   execute BIOS int 10h calls in x86 real mode environment
++ *                 Copyright 1999 Egbert Eich
++ *
++ *   Part of this is based on code taken from DOSEMU
++ *   (C) Copyright 1992, ..., 1999 the "DOSEMU-Development-Team"
++ */
++
++/*
++ * To debug port accesses define PRINT_PORT.
++ * Note! You also have to comment out ioperm()
++ * in xf86EnableIO(). Otherwise we won't trap
++ * on PIO.
++ */
++#include <x86emu.h>
++#include "test.h"
++#include "sys_io.h"
++//#include <sys/time.h>
++
++int port_rep_inb(u16 port, u32 base, int d_f, u32 count);
++u8 x_inb(u16 port);
++u16 x_inw(u16 port);
++void x_outb(u16 port, u8 val);
++void x_outw(u16 port, u16 val);
++u32 x_inl(u16 port);
++void x_outl(u16 port, u32 val);
++
++/* general software interrupt handler */
++u32 getIntVect(int num)
++{
++	return MEM_RW(num << 2) + (MEM_RW((num << 2) + 2) << 4);
++}
++
++void pushw(u16 val)
++{
++	X86_ESP -= 2;
++	MEM_WW(((u32) X86_SS << 4) + X86_SP, val);
++}
++
++int run_bios_int(int num)
++{
++	u32 eflags;
++
++	eflags = X86_EFLAGS;
++	pushw(eflags);
++	pushw(X86_CS);
++	pushw(X86_IP);
++	X86_CS = MEM_RW((num << 2) + 2);
++	X86_IP = MEM_RW(num << 2);
++
++	printf("%s: INT %x CS:IP = %x:%x\n", __FUNCTION__,
++	       num, MEM_RW((num << 2) + 2), MEM_RW(num << 2));
++
++	return 1;
++}
++
++int port_rep_inb(u16 port, u32 base, int d_f, u32 count)
++{
++	register int inc = d_f ? -1 : 1;
++	u32 dst = base;
++	while (count--) {
++		MEM_WB(dst, x_inb(port));
++		dst += inc;
++	}
++	return dst - base;
++}
++
++int port_rep_inw(u16 port, u32 base, int d_f, u32 count)
++{
++	register int inc = d_f ? -2 : 2;
++	u32 dst = base;
++	while (count--) {
++		MEM_WW(dst, x_inw(port));
++		dst += inc;
++	}
++	return dst - base;
++}
++
++int port_rep_inl(u16 port, u32 base, int d_f, u32 count)
++{
++	register int inc = d_f ? -4 : 4;
++	u32 dst = base;
++	while (count--) {
++		MEM_WL(dst, x_inl(port));
++		dst += inc;
++	}
++	return dst - base;
++}
++
++int port_rep_outb(u16 port, u32 base, int d_f, u32 count)
++{
++	register int inc = d_f ? -1 : 1;
++	u32 dst = base;
++	while (count--) {
++		x_outb(port, MEM_RB(dst));
++		dst += inc;
++	}
++	return dst - base;
++}
++
++int port_rep_outw(u16 port, u32 base, int d_f, u32 count)
++{
++	register int inc = d_f ? -2 : 2;
++	u32 dst = base;
++	while (count--) {
++		x_outw(port, MEM_RW(dst));
++		dst += inc;
++	}
++	return dst - base;
++}
++
++int port_rep_outl(u16 port, u32 base, int d_f, u32 count)
++{
++	register int inc = d_f ? -4 : 4;
++	u32 dst = base;
++	while (count--) {
++		x_outl(port, MEM_RL(dst));
++		dst += inc;
++	}
++	return dst - base;
++}
++
++u8 x_inb(u16 port)
++{
++	u8 val;
++
++	val = inb(port);
++
++	/*printf("inb(0x%04x) = 0x%02x\n", port, val);*/
++
++	return val;
++}
++
++u16 x_inw(u16 port)
++{
++	u16 val;
++
++	val = inw(port);
++
++	/*printf("inw(0x%04x) = 0x%04x\n", port, val);*/
++	return val;
++}
++
++u32 x_inl(u16 port)
++{
++	u32 val;
++
++	val = inl(port);
++
++	/*printf("inl(0x%04x) = 0x%08x\n", port, val);*/
++	return val;
++}
++
++void x_outb(u16 port, u8 val)
++{
++	/*printf("outb(0x%02x, 0x%04x)\n", val, port);*/
++	outb(val, port);
++}
++
++void x_outw(u16 port, u16 val)
++{
++	/*printf("outw(0x%04x, 0x%04x)\n", val, port);*/
++	outw(val, port);
++}
++
++void x_outl(u16 port, u32 val)
++{
++	/*printf("outl(0x%08x, 0x%04x)\n", val, port);*/
++	outl(val, port);
++}
++
++u8 Mem_rb(int addr)
++{
++	return (*current->mem->rb) (current, addr);
++}
++
++u16 Mem_rw(int addr)
++{
++	return (*current->mem->rw) (current, addr);
++}
++
++u32 Mem_rl(int addr)
++{
++	return (*current->mem->rl) (current, addr);
++}
++
++void Mem_wb(int addr, u8 val)
++{
++	(*current->mem->wb) (current, addr, val);
++}
++
++void Mem_ww(int addr, u16 val)
++{
++	(*current->mem->ww) (current, addr, val);
++}
++
++void Mem_wl(int addr, u32 val)
++{
++	(*current->mem->wl) (current, addr, val);
++}
++
++#if 0
++void getsecs(unsigned long *sec, unsigned long *usec)
++{
++	struct timeval tv;
++	gettimeofday(&tv, 0);
++	*sec = tv.tv_sec;
++	*usec = tv.tv_usec;
++}
++#endif
++
++#define TAG(Cfg1Addr) (Cfg1Addr & 0xffff00)
++#define OFFSET(Cfg1Addr) (Cfg1Addr & 0xff)
++
++u8 bios_checksum(u8 * start, int size)
++{
++	u8 sum = 0;
++
++	while (size-- > 0)
++		sum += *start++;
++	return sum;
++}
++
++/*
++ * Lock/Unlock legacy VGA. Some Bioses try to be very clever and make
++ * an attempt to detect a legacy ISA card. If they find one they might
++ * act very strange: for example they might configure the card as a
++ * monochrome card. This might cause some drivers to choke.
++ * To avoid this we attempt legacy VGA by writing to all know VGA
++ * disable registers before we call the BIOS initialization and
++ * restore the original values afterwards. In beween we hold our
++ * breath. To get to a (possibly exising) ISA card need to disable
++ * our current PCI card.
++ */
++/*
++ * This is just for booting: we just want to catch pure
++ * legacy vga therefore we don't worry about mmio etc.
++ * This stuff should really go into vgaHW.c. However then
++ * the driver would have to load the vga-module prior to
++ * doing int10.
++ */
++/*void
++LockLegacyVGA(int screenIndex,legacyVGAPtr vga)
++{
++    xf86SetCurrentAccess(FALSE, xf86Screens[screenIndex]);
++    vga->save_msr = inb(0x3CC);
++    vga->save_vse = inb(0x3C3);
++    vga->save_46e8 = inb(0x46e8);
++    vga->save_pos102 = inb(0x102);
++    outb(0x3C2, ~(u8)0x03 & vga->save_msr);
++    outb(0x3C3, ~(u8)0x01 & vga->save_vse);
++    outb(0x46e8, ~(u8)0x08 & vga->save_46e8);
++    outb(0x102, ~(u8)0x01 & vga->save_pos102);
++    xf86SetCurrentAccess(TRUE, xf86Screens[screenIndex]);
++}
++
++void
++UnlockLegacyVGA(int screenIndex, legacyVGAPtr vga)
++{
++    xf86SetCurrentAccess(FALSE, xf86Screens[screenIndex]);
++    outb(0x102, vga->save_pos102);
++    outb(0x46e8, vga->save_46e8);
++    outb(0x3C3, vga->save_vse);
++    outb(0x3C2, vga->save_msr);
++    xf86SetCurrentAccess(TRUE, xf86Screens[screenIndex]);
++}
++*/
+Index: vgabios/test.h
+===================================================================
+--- vgabios/test.h	(revision 0)
++++ vgabios/test.h	(revision 0)
+@@ -0,0 +1,89 @@
++/* $XFree86: xc/programs/Xserver/hw/xfree86/int10/xf86x86emu.h,v 1.2 2001/01/06 20:19:13 tsi Exp $ */
++/*
++ *                   XFree86 int10 module
++ *   execute BIOS int 10h calls in x86 real mode environment
++ *                 Copyright 1999 Egbert Eich
++ */
++#ifndef XF86X86EMU_H_
++#define XF86X86EMU_H_
++#include <x86emu.h>
++
++#define M _X86EMU_env
++
++#define X86_EAX M.x86.R_EAX
++#define X86_EBX M.x86.R_EBX
++#define X86_ECX M.x86.R_ECX
++#define X86_EDX M.x86.R_EDX
++#define X86_ESI M.x86.R_ESI
++#define X86_EDI M.x86.R_EDI
++#define X86_EBP M.x86.R_EBP
++#define X86_EIP M.x86.R_EIP
++#define X86_ESP M.x86.R_ESP
++#define X86_EFLAGS M.x86.R_EFLG
++
++#define X86_FLAGS M.x86.R_FLG
++#define X86_AX M.x86.R_AX
++#define X86_BX M.x86.R_BX
++#define X86_CX M.x86.R_CX
++#define X86_DX M.x86.R_DX
++#define X86_SI M.x86.R_SI
++#define X86_DI M.x86.R_DI
++#define X86_BP M.x86.R_BP
++#define X86_IP M.x86.R_IP
++#define X86_SP M.x86.R_SP
++#define X86_CS M.x86.R_CS
++#define X86_DS M.x86.R_DS
++#define X86_ES M.x86.R_ES
++#define X86_SS M.x86.R_SS
++#define X86_FS M.x86.R_FS
++#define X86_GS M.x86.R_GS
++
++#define X86_AL M.x86.R_AL
++#define X86_BL M.x86.R_BL
++#define X86_CL M.x86.R_CL
++#define X86_DL M.x86.R_DL
++
++#define X86_AH M.x86.R_AH
++#define X86_BH M.x86.R_BH
++#define X86_CH M.x86.R_CH
++#define X86_DH M.x86.R_DH
++
++
++/* int10 info structure */
++typedef struct {
++	u16 BIOSseg;
++	u16 inb40time;
++	struct _mem *mem;
++	int num;
++	int ax;
++	int bx;
++	int cx;
++	int dx;
++	int si;
++	int di;
++	int es;
++	int bp;
++	int flags;
++	int stackseg;
++} _ptr, *ptr;
++
++typedef struct _mem {
++	u8(*rb) (ptr, int);
++	u16(*rw) (ptr, int);
++	u32(*rl) (ptr, int);
++	void (*wb) (ptr, int, u8);
++	void (*ww) (ptr, int, u16);
++	void (*wl) (ptr, int, u32);
++} mem;
++
++#define MEM_WB(where, what) wrb(where,what)
++#define MEM_WW(where, what) wrw(where, what)
++#define MEM_WL(where, what) wrl(where, what)
++
++#define MEM_RB(where) rdb(where)
++#define MEM_RW(where) rdw(where)
++#define MEM_RL(where) rdl(where)
++
++extern ptr current;
++
++#endif
+Index: vgabios/inte6.c
+===================================================================
+--- vgabios/inte6.c	(revision 0)
++++ vgabios/inte6.c	(revision 0)
+@@ -0,0 +1,18 @@
++#include <stdio.h>
++
++int intE6_handler()
++{
++#if 0
++	pciVideoPtr pvp;
++
++	if ((pvp = xf86GetPciInfoForEntity(pInt->entityIndex)))
++		X86_AX = (pvp->bus << 8) | (pvp->device << 3) | (pvp->func & 0x7);
++	pushw(X86_CS);
++	pushw(X86_IP);
++	X86_CS = pInt->BIOSseg;
++	X86_EIP = 0x0003;
++	X86_ES = 0;		/* standard pc es */
++#endif
++	printf("intE6 not supported right now.\n");
++	return 1;
++}
+Index: vgabios/vgabios.c
+===================================================================
+--- vgabios/vgabios.c	(revision 0)
++++ vgabios/vgabios.c	(revision 0)
+@@ -0,0 +1,285 @@
++#include "../types.h"
++#include "../utils.h"
++#include "../linux_code.h"
++#include "sys_pci.h"
++
++#include <x86emu.h>
++#include "test.h"
++
++// interrupt handlers
++int int15_handler(void);
++int int16_handler(void);
++int int1A_handler(void);
++int int42_handler(void);
++int intE6_handler(void);
++// int10 info structure
++_ptr p;
++ptr current = 0;
++unsigned char biosmem[1024 * 1024];
++
++int verbose = 0;
++// helper_exec.c
++u32	getIntVect(int num);
++void	pushw(u16 val);
++int	run_bios_int(int num);
++u8	x_inb(u16 port);
++u16	x_inw(u16 port);
++void	x_outb(u16 port, u8 val);
++void	x_outw(u16 port, u16 val);
++u32	x_inl(u16 port);
++void	x_outl(u16 port, u32 val);
++
++X86EMU_pioFuncs myfuncs = {
++	x_inb, x_inw, x_inl,
++	x_outb, x_outw, x_outl
++};
++
++//
++void X86EMU_setMemBase(void *base, size_t size);
++void X86EMU_setabseg(void *abseg);
++
++
++//
++extern int	safe_to_use_bios;
++extern int	safe_to_use_vesa;
++
++#define bios_tbl_len 258
++// real_memory is used internally by vbetool.c and thunk.c
++//extern	uint8_t	*real_memory;
++
++void	copy_memory_to_system(uint8_t *addr);
++void	vga_post(uint8_t *bios_addr, unsigned int pci_id);
++void	do_int(int num);
++void	bios_write_char(char *s);
++
++/*---------------------------------------------------------------------------*/
++void
++copy_memory_to_system(uint8_t *addr)
++{
++	//print("ATV: Map bios RAM memory read/write\n");
++	// Intel 82945G Host bridge
++	// 0x90-0x96 -- programmable attribute map (PAM0-PAM6)
++	// 0x97 -- legacy access control (LAC)
++	conf1_write_8(0, 0, 0x90, 0x30); // PAM0 - 0xF0000-0xFFFFF w/r -> dram
++	conf1_write_8(0, 0, 0x91, 0x33); // PAM1 - 0xC0000-0xC3FFF and 0xC4000-0xC7FFF  w/r -> dram
++	conf1_write_8(0, 0, 0x92, 0x33); // PAM2 - 0xC8000-0xCBFFF and 0xCC000-0xCFFFF  w/r -> dram
++	conf1_write_8(0, 0, 0x93, 0x33); // PAM3 - 0xD0000-0xD3FFF and 0xD4000-0xD7FFF  w/r -> dram
++	conf1_write_8(0, 0, 0x94, 0x33); // PAM4 - 0xD8000-0xDBFFF and 0xDC000-0xDFFFF  w/r -> dram
++	conf1_write_8(0, 0, 0x95, 0x33); // PAM5 - 0xE0000-0xE3FFF and 0xE4000-0xE7FFF  w/r -> dram
++	conf1_write_8(0, 0, 0x96, 0x33); // PAM6 - 0xE8000-0xEBFFF and 0xEC000-0xEFFFF  w/r -> dram
++	conf1_write_8(0, 0, 0x97, 0x00); // LAC - 15MB to 16MB memory hole disabled, MDA and VGA references routed to DMI
++
++	//print("ATV: Copy bios rom code into place\n");
++	/*Interrupt table */
++	memcpy( (void*) (0x0), addr, 0x400);
++	/*BIOS table */
++	memcpy( (void*) (0x400), addr + 0x400, bios_tbl_len);
++	/*Video rom */
++	memcpy( (void*) (0xc0000), addr + 0xc0000, 0x20000);
++	/*System rom */
++	memcpy( (void*) (0xe0000), addr + 0xe0000, 0x20000);
++
++	//print("ATV: Map bios RAM location readonly\n");
++	conf1_write_8( 0, 0, 0x90, 0x10); // PAM0 - 0xF0000-0xFFFFF r -> dram, w -> DMI
++	conf1_write_8( 0, 0, 0x91, 0x11); // PAM1 - 0xC0000-0xC3FFF and 0xC4000-0xC7FFF  r -> dram, w -> DMI
++	conf1_write_8( 0, 0, 0x92, 0x11); // PAM2 - 0xC8000-0xCBFFF and 0xCC000-0xCFFFF  r -> dram, w -> DMI
++	conf1_write_8( 0, 0, 0x93, 0x11); // PAM3 - 0xD0000-0xD3FFF and 0xD4000-0xD7FFF  r -> dram, w -> DMI
++	conf1_write_8( 0, 0, 0x94, 0x11); // PAM4 - 0xD8000-0xDBFFF and 0xDC000-0xDFFFF  r -> dram, w -> DMI
++}
++
++/*---------------------------------------------------------------------------*/
++void
++vga_init(boot_params_t *bp, uint8_t *bios_addr)
++{
++	unsigned int pci_id;
++	
++	//real_memory = bios_addr;
++
++	// Intel 82945G Host bridge
++	// 0x54 -- Device Enable (DEVEN)
++	// DEVEN - 0x83 for AppleTV (both internal GMs are disabled, PCI express port enabled)
++	conf1_write_8(0, 0, 0x54, 0x83);
++
++	//LRMI_init();
++
++	// Stop using "print" with the vesa linear buffer from EFI from now on
++	//safe_to_use_vesa = 0;
++	
++	// MacMini (lspci)
++	// 00:02.00 VGA compatible controller: Intel Corporation Mobile 945GM/GMS, 943/940GML Express Integrated Graphics Controller (rev 03)
++	//pci_id = ( (1 << 8) | (0 << 3) | (0 & 0x7) ) & 0x0000FFFF;
++	// iMac 20" 
++	// 01:00.0 VGA compatible controller: ATI Technologies Inc Unknown device 71c5
++	// iMac 24" 
++	// 01:00.0 VGA compatible controller: ATI Technologies Inc Unknown device 9583
++	// AppleTV (lspci)
++	// 01:00.00 VGA compatible controller: nVidia Corporation Quadro NVS 110M / GeForce Go 7300 (rev a1)
++	pci_id = ( (1 << 8) + (0 << 3) + (0 & 0x7) ) & 0x0000FFFF;
++
++	vga_post(bios_addr, pci_id);
++	
++	//do_real_post(pci_id);
++	//do_set_mode(3, 1);
++
++	// Copy the roms from our emulator into the system */
++	copy_memory_to_system(bios_addr);
++	
++	//print("ATV: Map bios RAM location readonly\n");
++	conf1_write_8( 0, 0, 0x90, 0x10); // PAM0 - 0xF0000-0xFFFFF r -> dram, w -> DMI
++	conf1_write_8( 0, 0, 0x91, 0x11); // PAM1 - 0xC0000-0xC3FFF and 0xC4000-0xC7FFF  r -> dram, w -> DMI
++	conf1_write_8( 0, 0, 0x92, 0x11); // PAM2 - 0xC8000-0xCBFFF and 0xCC000-0xCFFFF  r -> dram, w -> DMI
++	conf1_write_8( 0, 0, 0x93, 0x11); // PAM3 - 0xD0000-0xD3FFF and 0xD4000-0xD7FFF  r -> dram, w -> DMI
++	conf1_write_8( 0, 0, 0x94, 0x11); // PAM4 - 0xD8000-0xDBFFF and 0xDC000-0xDFFFF  r -> dram, w -> DMI
++
++	//bios_set_active_page(0x0);
++	//bios_move_cursor(0, 0);
++
++	// Call into the real mode bios to write to the screen now */
++	safe_to_use_bios = 1;
++	/*
++	// setup Linux video boot params
++	{
++		int have_vga, video_ega_bx = 0;
++		int cursor_pos = 0;
++		int video_page = 0;
++		int video_mode = 0;
++		int font_points = 0;
++		int video_cols = 0;
++		int video_lines = 0;
++
++		//linux_basic_detect(&have_vga, &video_ega_bx);
++		//linux_mode_params(&cursor_pos, &video_page, &video_mode, &font_points,
++		//	       &video_cols, &video_lines);
++
++		have_vga = 1;
++		
++		bp->s.orig_x = cursor_pos & 0xff;
++		bp->s.orig_y = cursor_pos >> 8;
++		bp->s.orig_video_page = video_page;
++		bp->s.orig_video_mode = video_mode;
++		bp->s.orig_video_cols = video_cols;
++		bp->s.orig_video_rows = video_lines + 1;
++
++		bp->s.orig_ega_bx = video_ega_bx;
++		bp->s.is_vga = have_vga;
++		bp->s.orig_video_points = font_points;
++	}
++	*/
++}
++
++/*---------------------------------------------------------------------------*/
++void
++vga_post(uint8_t *bios_addr, unsigned int pci_id)
++{
++	int	i;
++	void	*abseg = 0;
++	unsigned short initialip = 0xc000;
++	unsigned short initialcs = 0x0003;
++	unsigned short devfn = pci_id;
++	//
++	X86EMU_intrFuncs intFuncs[256];
++
++	current = &p;
++	//
++	X86EMU_setMemBase(bios_addr, 1024*1024);
++	X86EMU_setabseg(abseg);
++	X86EMU_setupPioFuncs(&myfuncs);
++
++	// Setting up interrupt environment.
++	for (i = 0; i < 256; i++) {
++		intFuncs[i] = do_int;
++	}
++	X86EMU_setupIntrFuncs(intFuncs);
++	
++	current->ax = devfn;
++	current->dx = 0x80;
++
++	// fake bios (wrb -> write byte to emulator memory)
++	char *date = "01/01/99";
++	for (i = i; date[i]; i++) {
++		wrb(0xffff5 + i, date[i]);
++	}
++	wrb(0xffff7, '/');
++	wrb(0xffffa, '/');
++
++	/* cpu setup */
++	X86_AX = devfn;
++	X86_DX = 0x80;
++	X86_EIP = initialip;
++	X86_CS = initialcs;
++
++	/* Initialize stack and data segment */
++	X86_SS = 0x0030;
++	X86_DS = 0x0040;
++	X86_SP = 0xfffe;
++	/* We need a sane way to return from bios
++	 * execution. A hlt instruction and a pointer
++	 * to it, both kept on the stack, will do.
++	 */
++	pushw(0xf4f4);		/* hlt; hlt */
++	pushw(X86_SS);
++	pushw(X86_SP + 2);
++
++	X86_ES = 0x0000;
++
++	if (0) {
++		//printf("Switching to single step mode.\n");
++		//X86EMU_trace_on();
++	}
++	if (0) {
++		//X86EMU_set_debug(debugflag);
++	}
++	X86EMU_exec();
++}
++/*---------------------------------------------------------------------------*/
++void	bios_write_char(char *s)
++{
++
++}
++
++/*---------------------------------------------------------------------------*/
++/* Interrupt multiplexer */
++void do_int(int num)
++{
++	int ret = 0;
++
++	printf("int%x vector at %x\n", num, getIntVect(num));
++
++	/* This is a pInt leftover */
++	current->num = num;
++
++	switch (num) {
++	case 0x10:
++	case 0x42:
++	case 0x6D:
++
++		if (getIntVect(num) == 0xFF065) {
++			ret = int42_handler();
++		}
++		break;
++	case 0x15:
++		ret = int15_handler();
++		break;
++	case 0x16:
++		ret = int16_handler();
++		break;
++	case 0x1A:
++		//ret = int1A_handler();
++		break;
++	case 0xe6:
++		ret = intE6_handler();
++		break;
++	default:
++		break;
++	}
++
++	if (!ret)
++		ret = run_bios_int(num);
++
++	if (!ret) {
++		printf("\nint%x: not implemented\n", num);
++		//x86emu_dump_xregs();
++	}
++}
++
++
+Index: vgabios/int10.c
+===================================================================
+--- vgabios/int10.c	(revision 0)
++++ vgabios/int10.c	(revision 0)
+@@ -0,0 +1,478 @@
++#include <stdio.h>
++#include "test.h"
++#include "pci.h"
++
++void x86emu_dump_xregs(void);
++extern ptr current;
++extern int verbose;
++
++
++#ifndef _PC
++/*
++ * This is derived from a number of PC system BIOS'es.  The intent here is to
++ * provide very primitive video support, before an EGA/VGA BIOS installs its
++ * own interrupt vector.  Here, "Ignored" calls should remain so.  "Not
++ * Implemented" denotes functionality that can be implemented should the need
++ * arise.  What are "Not Implemented" throughout are video memory accesses.
++ * Also, very little input validity checking is done here.
++ */
++int int42_handler()
++{
++#if 0
++	if (verbose && X86_AH != 0x0e) {
++		printf("int%x\n", current->num);
++		x86emu_dump_xregs();
++	}
++
++	switch (X86_AH) {
++	case 0x00:
++		/* Set Video Mode                                     */
++		/* Enter:  AL = video mode number                     */
++		/* Leave:  Nothing                                    */
++		/* Implemented (except for clearing the screen)       */
++		{		/* Localise */
++			int i;
++			u16 ioport, int1d, regvals, tmp;
++			u8 mode, cgamode, cgacolour;
++
++			/*
++			 * Ignore all mode numbers but 0x00-0x13.  Some systems also ignore
++			 * 0x0B and 0x0C, but don't do that here.
++			 */
++			if (X86_AL > 0x13)
++				break;
++
++			/*
++			 * You didn't think that was really the mode set, did you?  There
++			 * are only so many slots in the video parameter table...
++			 */
++			mode = X86_AL;
++			ioport = 0x03D4;
++			switch (MEM_RB(0x0410) & 0x30) {
++			case 0x30:	/* MDA */
++				mode = 0x07;	/* Force mode to 0x07 */
++				ioport = 0x03B4;
++				break;
++			case 0x10:	/* CGA 40x25 */
++				if (mode >= 0x07)
++					mode = 0x01;
++				break;
++			case 0x20:	/* CGA 80x25 (MCGA?) */
++				if (mode >= 0x07)
++					mode = 0x03;
++				break;
++			case 0x00:	/* EGA/VGA */
++				if (mode >= 0x07)	/* Don't try MDA timings */
++					mode = 0x01;	/* !?!?! */
++				break;
++			}
++
++			/* Locate data in video parameter table */
++			int1d = MEM_RW(0x1d << 2);
++			regvals = ((mode >> 1) << 4) + int1d;
++			cgacolour = 0x30;
++			if (mode == 0x06) {
++				regvals -= 0x10;
++				cgacolour = 0x3F;
++			}
++
++	    /** Update BIOS Data Area **/
++
++			/* Video mode */
++			MEM_WB(0x0449, mode);
++
++			/* Columns */
++			tmp = MEM_RB(mode + int1d + 0x48);
++			MEM_WW(0x044A, tmp);
++
++			/* Page length */
++			tmp = MEM_RW((mode & 0x06) + int1d + 0x40);
++			MEM_WW(0x044C, tmp);
++
++			/* Start Address */
++			MEM_WW(0x044E, 0);
++
++			/* Cursor positions, one for each display page */
++			for (i = 0x0450; i < 0x0460; i += 2)
++				MEM_WW(i, 0);
++
++			/* Cursor start & end scanlines */
++			tmp = MEM_RB(regvals + 0x0B);
++			MEM_WB(0x0460, tmp);
++			tmp = MEM_RB(regvals + 0x0A);
++			MEM_WB(0x0461, tmp);
++
++			/* Current display page number */
++			MEM_WB(0x0462, 0);
++
++			/* CRTC I/O address */
++			MEM_WW(0x0463, ioport);
++
++			/* CGA Mode register value */
++			cgamode = MEM_RB(mode + int1d + 0x50);
++			MEM_WB(0x0465, cgamode);
++
++			/* CGA Colour register value */
++			MEM_WB(0x0466, cgacolour);
++
++			/* Rows */
++			MEM_WB(0x0484, (25 - 1));
++
++			/* Programme the mode */
++			outb(ioport + 4, cgamode & 0x37);	/* Turn off screen */
++			for (i = 0; i < 0x10; i++) {
++				tmp = MEM_RB(regvals + i);
++				outb(ioport, i);
++				outb(ioport + 1, tmp);
++			}
++			outb(ioport + 5, cgacolour);	/* Select colour mode */
++			outb(ioport + 4, cgamode);	/* Turn on screen */
++		}
++		break;
++
++	case 0x01:
++		/* Set Cursor Type                                    */
++		/* Enter:  CH = starting line for cursor              */
++		/*         CL = ending line for cursor                */
++		/* Leave:  Nothing                                    */
++		/* Implemented                                        */
++		{		/* Localise */
++			u16 ioport = MEM_RW(0x0463);
++
++			MEM_WB(0x0460, X86_CL);
++			MEM_WB(0x0461, X86_CH);
++
++			outb(ioport, 0x0A);
++			outb(ioport + 1, X86_CH);
++			outb(ioport, 0x0B);
++			outb(ioport + 1, X86_CL);
++		}
++		break;
++
++	case 0x02:
++		/* Set Cursor Position                                */
++		/* Enter:  BH = display page number                   */
++		/*         DH = row                                   */
++		/*         DL = column                                */
++		/* Leave:  Nothing                                    */
++		/* Implemented                                        */
++		{		/* Localise */
++			u16 offset, ioport;
++
++			MEM_WB((X86_BH << 1) + 0x0450, X86_DL);
++			MEM_WB((X86_BH << 1) + 0x0451, X86_DH);
++
++			if (X86_BH != MEM_RB(0x0462))
++				break;
++
++			offset = (X86_DH * MEM_RW(0x044A)) + X86_DL;
++			offset += MEM_RW(0x044E) << 1;
++
++			ioport = MEM_RW(0x0463);
++			outb(ioport, 0x0E);
++			outb(ioport + 1, offset >> 8);
++			outb(ioport, 0x0F);
++			outb(ioport + 1, offset & 0xFF);
++		}
++		break;
++
++	case 0x03:
++		/* Get Cursor Position                                */
++		/* Enter:  BH = display page number                   */
++		/* Leave:  CH = starting line for cursor              */
++		/*         CL = ending line for cursor                */
++		/*         DH = row                                   */
++		/*         DL = column                                */
++		/* Implemented                                        */
++		{		/* Localise */
++			X86_CL = MEM_RB(0x0460);
++			X86_CH = MEM_RB(0x0461);
++			X86_DL = MEM_RB((X86_BH << 1) + 0x0450);
++			X86_DH = MEM_RB((X86_BH << 1) + 0x0451);
++		}
++		break;
++
++	case 0x04:
++		/* Get Light Pen Position                             */
++		/* Enter:  Nothing                                    */
++		/* Leave:  AH = 0x01 (down/triggered) or 0x00 (not)   */
++		/*         BX = pixel column                          */
++		/*         CX = pixel row                             */
++		/*         DH = character row                         */
++		/*         DL = character column                      */
++		/* Not Implemented                                    */
++		{		/* Localise */
++			printf("int%x - Get Light Pen Position. "
++			       "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++			X86_AH = X86_BX = X86_CX = X86_DX = 0;
++		}
++		break;
++
++	case 0x05:
++		/* Set Display Page                                   */
++		/* Enter:  AL = display page number                   */
++		/* Leave:  Nothing                                    */
++		/* Implemented                                        */
++		{		/* Localise */
++			u16 start, ioport = MEM_RW(0x0463);
++			u8 x, y;
++
++			/* Calculate new start address */
++			MEM_WB(0x0462, X86_AL);
++			start = X86_AL * MEM_RW(0x044C);
++			MEM_WW(0x044E, start);
++			start <<= 1;
++
++			/* Update start address */
++			outb(ioport, 0x0C);
++			outb(ioport + 1, start >> 8);
++			outb(ioport, 0x0D);
++			outb(ioport + 1, start & 0xFF);
++
++			/* Switch cursor position */
++			y = MEM_RB((X86_AL << 1) + 0x0450);
++			x = MEM_RB((X86_AL << 1) + 0x0451);
++			start += (y * MEM_RW(0x044A)) + x;
++
++			/* Update cursor position */
++			outb(ioport, 0x0E);
++			outb(ioport + 1, start >> 8);
++			outb(ioport, 0x0F);
++			outb(ioport + 1, start & 0xFF);
++		}
++		break;
++
++	case 0x06:
++		/* Initialise or Scroll Window Up                     */
++		/* Enter:  AL = lines to scroll up                    */
++		/*         BH = attribute for blank                   */
++		/*         CH = upper y of window                     */
++		/*         CL = left x of window                      */
++		/*         DH = lower y of window                     */
++		/*         DL = right x of window                     */
++		/* Leave:  Nothing                                    */
++		/* Not Implemented                                    */
++		{		/* Localise */
++			printf("int%x: Initialise or Scroll Window Up - "
++			       "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++		}
++		break;
++
++	case 0x07:
++		/* Initialise or Scroll Window Down                   */
++		/* Enter:  AL = lines to scroll down                  */
++		/*         BH = attribute for blank                   */
++		/*         CH = upper y of window                     */
++		/*         CL = left x of window                      */
++		/*         DH = lower y of window                     */
++		/*         DL = right x of window                     */
++		/* Leave:  Nothing                                    */
++		/* Not Implemented                                    */
++		{		/* Localise */
++			printf("int%x: Initialise or Scroll Window Down - "
++			       "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++
++		}
++		break;
++
++	case 0x08:
++		/* Read Character and Attribute at Cursor             */
++		/* Enter:  BH = display page number                   */
++		/* Leave:  AH = attribute                             */
++		/*         AL = character                             */
++		/* Not Implemented                                    */
++		{		/* Localise */
++			printf
++			    ("int%x: Read Character and Attribute at Cursor - "
++			     "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++
++			X86_AX = 0;
++		}
++		break;
++
++	case 0x09:
++		/* Write Character and Attribute at Cursor            */
++		/* Enter:  AL = character                             */
++		/*         BH = display page number                   */
++		/*         BL = attribute (text) or colour (graphics) */
++		/*         CX = replication count                     */
++		/* Leave:  Nothing                                    */
++		/* Not Implemented                                    */
++		{		/* Localise */
++			printf
++			    ("int%x: Write Character and Attribute at Cursor - "
++			     "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++
++		}
++		break;
++
++	case 0x0a:
++		/* Write Character at Cursor                          */
++		/* Enter:  AL = character                             */
++		/*         BH = display page number                   */
++		/*         BL = colour                                */
++		/*         CX = replication count                     */
++		/* Leave:  Nothing                                    */
++		/* Not Implemented                                    */
++		{		/* Localise */
++			printf("int%x: Write Character at Cursor - "
++			       "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++
++		}
++		break;
++
++	case 0x0b:
++		/* Set Palette, Background or Border                  */
++		/* Enter:  BH = 0x00 or 0x01                          */
++		/*         BL = colour or palette (respectively)      */
++		/* Leave:  Nothing                                    */
++		/* Implemented                                        */
++		{		/* Localise */
++			u16 ioport = MEM_RW(0x0463) + 5;
++			u8 cgacolour = MEM_RB(0x0466);
++
++			if (X86_BH) {
++				cgacolour &= 0xDF;
++				cgacolour |= (X86_BL & 0x01) << 5;
++			} else {
++				cgacolour &= 0xE0;
++				cgacolour |= X86_BL & 0x1F;
++			}
++
++			MEM_WB(0x0466, cgacolour);
++			outb(ioport, cgacolour);
++		}
++		break;
++
++	case 0x0c:
++		/* Write Graphics Pixel                               */
++		/* Enter:  AL = pixel value                           */
++		/*         BH = display page number                   */
++		/*         CX = column                                */
++		/*         DX = row                                   */
++		/* Leave:  Nothing                                    */
++		/* Not Implemented                                    */
++		{		/* Localise */
++			printf("int%x: Write Graphics Pixel - "
++			       "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++
++		}
++		break;
++
++	case 0x0d:
++		/* Read Graphics Pixel                                */
++		/* Enter:  BH = display page number                   */
++		/*         CX = column                                */
++		/*         DX = row                                   */
++		/* Leave:  AL = pixel value                           */
++		/* Not Implemented                                    */
++		{		/* Localise */
++			printf("int%x: Write Graphics Pixel - "
++			       "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++
++			X86_AL = 0;
++
++		}
++		break;
++
++	case 0x0e:
++		/* Write Character in Teletype Mode                   */
++		/* Enter:  AL = character                             */
++		/*         BH = display page number                   */
++		/*         BL = foreground colour                     */
++		/* Leave:  Nothing                                    */
++		/* Not Implemented                                    */
++		/* WARNING:  Emulation of BEL characters will require */
++		/*           emulation of RTC and PC speaker I/O.     */
++		/*           Also, this recurses through int 0x10     */
++		/*           which might or might not have been       */
++		/*           installed yet.                           */
++		{		/* Localise */
++#ifdef PARANOID
++			printf("int%x: Write Character in Teletype Mode - "
++			       "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++#endif
++			printf("%c", X86_AL);
++		}
++		break;
++
++	case 0x0f:
++		/* Get Video Mode                                     */
++		/* Enter:  Nothing                                    */
++		/* Leave:  AH = number of columns                     */
++		/*         AL = video mode number                     */
++		/*         BH = display page number                   */
++		/* Implemented                                        */
++		{		/* Localise */
++			X86_AH = MEM_RW(0x044A);
++			X86_AL = MEM_RB(0x0449);
++			X86_BH = MEM_RB(0x0462);
++		}
++		break;
++
++	case 0x10:
++		/* Colour Control (subfunction in AL)                 */
++		/* Enter:  Various                                    */
++		/* Leave:  Various                                    */
++		/* Ignored                                            */
++		break;
++
++	case 0x11:
++		/* Font Control (subfunction in AL)                   */
++		/* Enter:  Various                                    */
++		/* Leave:  Various                                    */
++		/* Ignored                                            */
++		break;
++
++	case 0x12:
++		/* Miscellaneous (subfunction in BL)                  */
++		/* Enter:  Various                                    */
++		/* Leave:  Various                                    */
++		/* Ignored.  Previous code here optionally allowed    */
++		/* the enabling and disabling of VGA, but no system   */
++		/* BIOS I've come across actually implements it.      */
++		break;
++
++	case 0x13:
++		/* Write String in Teletype Mode                      */
++		/* Enter:  AL = write mode                            */
++		/*         BL = attribute (if (AL & 0x02) == 0)       */
++		/*         CX = string length                         */
++		/*         DH = row                                   */
++		/*         DL = column                                */
++		/*         ES:BP = string segment:offset              */
++		/* Leave:  Nothing                                    */
++		/* Not Implemented                                    */
++		/* WARNING:  Emulation of BEL characters will require */
++		/*           emulation of RTC and PC speaker I/O.     */
++		/*           Also, this recurses through int 0x10     */
++		/*           which might or might not have been       */
++		/*           installed yet.                           */
++		{		/* Localise */
++			printf("int%x: Write String in Teletype Mode - "
++			       "Function not implemented.\n", current->num);
++			x86emu_dump_xregs();
++
++		}
++		break;
++
++	default:
++		/* Various extensions                                 */
++		/* Enter:  Various                                    */
++		/* Leave:  Various                                    */
++		/* Ignored                                            */
++		break;
++	}
++#endif
++	return 1;
++}
++#endif
+Index: vgabios/Makefile
+===================================================================
+--- vgabios/Makefile	(revision 0)
++++ vgabios/Makefile	(revision 0)
+@@ -0,0 +1,35 @@
++TARGETLIB = vgabios.a
++
++CC       =  gcc
++CFLAGS   =  -Wall -O2 -g -arch i386 -static -nostdlib\
++		-DNULL=0 \
++		-Dprintf=print
++		-DLIBPCI_MAJOR_VERSION=3  \
++		-DLIBPCI_MINOR_VERSION=0  \
++		-DLIBPCI_MICRO_VERSION=0
++
++INTOBJS	=  int10.o int15.o int16.o inte6.o
++#INTOBJS=  int10.o int15.o int16.o int1a.o inte6.o
++OBJECTS	=  vgabios.o sys_pci.o helper_exec.o helper_mem.o $(INTOBJS)
++#OBJECTS += pci-userspace.o
++
++LIBS	=  x86emu/src/libx86emu.a
++
++INCS	= -I. -Ix86emu/include
++
++all: $(TARGETLIB)
++
++$(TARGETLIB): $(OBJECTS) $(LIBS)
++	ar rv $(TARGETLIB) $(OBJECTS) $(LIBS)
++
++helper_exec.o: helper_exec.c test.h
++
++x86emu/src/libx86emu.a:
++	$(MAKE) -C x86emu/src/ -f make.darwin
++
++clean:
++	$(MAKE) -C x86emu/src/ -f make.darwin clean
++	$(RM) -f $(TARGET) $(OBJECTS)
++
++%.o: %.c 
++	$(CC) $(INCS) $(CFLAGS) -c $< -o $@
+Index: vgabios/testbios.c
+===================================================================
+--- vgabios/testbios.c	(revision 0)
++++ vgabios/testbios.c	(revision 0)
+@@ -0,0 +1,396 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <sys/io.h>
++#include <sys/mman.h>
++#include <fcntl.h>
++#include <getopt.h>
++#include <string.h>
++
++#define die(x) { perror(x); exit(1); }
++#define warn(x) { perror(x);  }
++
++#include <x86emu.h>
++#include "test.h"
++#include "pci-userspace.h"
++
++void x86emu_dump_xregs(void);
++int int15_handler(void);
++int int16_handler(void);
++int int1A_handler(void);
++#ifndef _PC
++int int42_handler(void);
++#endif
++int intE6_handler(void);
++
++void pushw(u16 val);
++
++unsigned short get_device(char *arg_val);
++
++extern int teststart, testend;
++
++// int10 info structure
++_ptr p;
++ptr current = 0;
++
++unsigned char biosmem[1024 * 1024];
++
++int verbose = 0;
++
++
++/* Interrupt multiplexer */
++
++void do_int(int num)
++{
++	int ret = 0;
++
++	printf("int%x vector at %x\n", num, getIntVect(num));
++
++	/* This is a pInt leftover */
++	current->num = num;
++
++	switch (num) {
++#ifndef _PC
++	case 0x10:
++	case 0x42:
++	case 0x6D:
++
++		if (getIntVect(num) == 0xFF065) {
++			ret = int42_handler();
++		}
++		break;
++#endif
++	case 0x15:
++		ret = int15_handler();
++		break;
++	case 0x16:
++		ret = int16_handler();
++		break;
++	case 0x1A:
++		ret = int1A_handler();
++		break;
++	case 0xe6:
++		ret = intE6_handler();
++		break;
++	default:
++		break;
++	}
++
++	if (!ret)
++		ret = run_bios_int(num);
++
++	if (!ret) {
++		printf("\nint%x: not implemented\n", num);
++		//x86emu_dump_xregs();
++	}
++}
++
++unsigned char *mapitin(char *file, off_t where, size_t size)
++{
++	void *z;
++
++	int fd = open(file, O_RDWR, 0);
++
++	if (fd < 0)
++		die(file);
++	z = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, where);
++	if (z == (void *) -1)
++		die("mmap");
++	close(fd);
++
++	return z;
++
++}
++
++u8 x_inb(u16 port);
++u16 x_inw(u16 port);
++void x_outb(u16 port, u8 val);
++void x_outw(u16 port, u16 val);
++u32 x_inl(u16 port);
++void x_outl(u16 port, u32 val);
++
++
++X86EMU_pioFuncs myfuncs = {
++	x_inb, x_inw, x_inl,
++	x_outb, x_outw, x_outl
++};
++
++
++void usage(char *name)
++{
++	printf
++	    ("Usage: %s [-c codesegment] [-s size] [-b base] [-i ip] [-t] <filename> ... \n",
++	     name);
++}
++
++int main(int argc, char **argv)
++{
++	char *absegname = 0;
++	void *abseg = 0;
++	int i, c, trace = 0;
++	unsigned char *cp;
++	char *filename;
++	size_t size = 0;
++	int base = 0;
++	int have_size = 0, have_base = 0, have_ip = 0, have_cs = 0;
++	int have_devfn = 0;
++	int parse_rom = 0;
++	char *fsegname = 0;
++	unsigned char *fsegptr;
++	unsigned short initialip = 0, initialcs = 0, devfn = 0;
++	X86EMU_intrFuncs intFuncs[256];
++	void X86EMU_setMemBase(void *base, size_t size);
++	void X86EMU_setabseg(void *abseg);
++	void x86emu_dump_xregs(void);
++	int X86EMU_set_debug(int debug);
++	int debugflag = 0;
++
++	const char *optstring = "vh?b:i:c:s:tpd:";
++	while (1) {
++		int option_index = 0;
++		static struct option long_options[] = {
++			{"verbose", 0, 0, 'v'},
++			{"help", 0, 0, 'h'},
++			{"trace", 0, 0, 't'},
++			{"base", 1, 0, 'b'},
++			{"fseg", 1, 0, 'f'},
++			{"instructionpointer", 1, 0, 'i'},
++			{"codesegment", 1, 0, 'c'},
++			{"absegment", 1, 0, 'a'},
++			{"size", 1, 0, 's'},
++			{"parserom", 0, 0, 'p'},
++			{"device", 1, 0, 'd'},
++			{"debug", 1, 0, 'D'},
++			{0, 0, 0, 0}
++		};
++		c = getopt_long(argc, argv, optstring, long_options, &option_index);
++		if (c == -1)
++			break;
++		switch (c) {
++		case 'v':
++			verbose = 1;
++			break;
++		case 'h':
++		case '?':
++			usage(argv[0]);
++			return 0;
++		case 't':
++			trace = 1;
++			break;
++		case 'b':
++			base = strtol(optarg, 0, 0);
++			have_base = 1;
++			break;
++		case 'i':
++			initialip = strtol(optarg, 0, 0);
++			have_ip = 1;
++			break;
++		case 'c':
++			initialcs = strtol(optarg, 0, 0);
++			have_cs = 1;
++			break;
++		case 's':
++			size = strtol(optarg, 0, 0);
++			have_size = 1;
++			break;
++		case 'p':
++			printf("Parsing rom images not implemented.\n");
++			parse_rom = 1;
++			break;
++		case 'f':
++			fsegname = optarg;
++			break;
++		case 'a':
++			absegname = optarg;
++			break;
++		case 'd':
++			devfn = get_device(optarg);
++			have_devfn = 1;
++			break;
++		case 'D':
++			debugflag = strtol(optarg, 0, 0);
++			break;
++		default:
++			printf("Unknown option \n");
++			usage(argv[0]);
++			return 1;
++		}
++	}
++
++	if (optind >= argc) {
++		printf("Filename missing.\n");
++		usage(argv[0]);
++		return 1;
++	}
++
++	while (optind < argc) {
++		printf("running file %s\n", argv[optind]);
++		filename = argv[optind];
++		optind++;
++		/* normally we would do continue, but for
++		 * now only one filename is supported.
++		 */
++		/* continue; */
++		break;
++	}
++
++	if (!have_size) {
++		printf("No size specified. defaulting to 32k\n");
++		size = 32 * 1024;
++	}
++	if (!have_base) {
++		printf("No base specified. defaulting to 0xc0000\n");
++		base = 0xc0000;
++	}
++	if (!have_cs) {
++		printf("No initial code segment specified. defaulting to 0xc000\n");
++		initialcs = 0xc000;
++	}
++	if (!have_ip) {
++		printf
++		    ("No initial instruction pointer specified. defaulting to 0x0003\n");
++		initialip = 0x0003;
++	}
++
++	//printf("Point 1 int%x vector at %x\n", 0x42, getIntVect(0x42));
++
++	if (initialip == 0x0003) {
++		if ((devfn == 0) || (have_devfn == 0)) {
++			printf("WARNING! It appears you are trying to run an option ROM.\n");
++			printf("  (initial ip = 0x0003)\n");
++			if (have_devfn) {
++				printf("  However, the device you have specified is 0x00\n");
++				printf("  It is very unlikely that your device is at this address\n");
++				printf("  Please check your -d option\n");
++			}
++			else {
++				printf("  Please specify a device with -d\n");
++				printf("  The default is not likely to work\n");
++			}
++		}
++	}
++	
++	if (absegname) {
++		abseg = mapitin(absegname, (off_t) 0xa0000, 0x20000);
++		if (!abseg)
++			die(absegname);
++	}
++
++	current = &p;
++	X86EMU_setMemBase(biosmem, sizeof(biosmem));
++	X86EMU_setabseg(abseg);
++	X86EMU_setupPioFuncs(&myfuncs);
++	ioperm(0, 0x400, 1);
++
++	if (iopl(3) < 0) {
++		warn("iopl failed, continuing anyway");
++	}
++
++	/* Emergency sync ;-) */
++	sync();
++	sync();
++
++	/* Setting up interrupt environment.
++	 * basically this means initializing PCI and
++	 * intXX handlers.
++	 */
++	pciInit();
++
++	for (i = 0; i < 256; i++)
++		intFuncs[i] = do_int;
++	X86EMU_setupIntrFuncs(intFuncs);
++	cp = mapitin(filename, (off_t) 0, size);
++
++	if (devfn) {
++		printf("Loading ax with BusDevFn = %x\n",devfn);
++	}
++	
++	current->ax = devfn   ? devfn : 0xff;
++	current->dx = 0x80;
++	//      current->ip = 0;
++	for (i = 0; i < size; i++)
++		wrb(base + i, cp[i]);
++
++	if (fsegname) {
++		fsegptr = mapitin(fsegname, (off_t) 0, 0x10000);
++		for (i = 0; i < 0x10000; i++)
++			wrb(0xf0000 + i, fsegptr[i]);
++	} else {
++		char *date = "01/01/99";
++		for (i = i; date[i]; i++)
++			wrb(0xffff5 + i, date[i]);
++		wrb(0xffff7, '/');
++		wrb(0xffffa, '/');
++	}
++	/* cpu setup */
++	X86_AX = devfn ? devfn : 0xff;
++	X86_DX = 0x80;
++	X86_EIP = initialip;
++	X86_CS = initialcs;
++
++	/* Initialize stack and data segment */
++	X86_SS = 0x0030;
++	X86_DS = 0x0040;
++	X86_SP = 0xfffe;
++	/* We need a sane way to return from bios
++	 * execution. A hlt instruction and a pointer
++	 * to it, both kept on the stack, will do.
++	 */
++	pushw(0xf4f4);		/* hlt; hlt */
++	pushw(X86_SS);
++	pushw(X86_SP + 2);
++
++	X86_ES = 0x0000;
++
++	if (trace) {
++		printf("Switching to single step mode.\n");
++		//X86EMU_trace_on();
++	}
++	if (debugflag) {
++		//X86EMU_set_debug(debugflag);
++	}
++	X86EMU_exec();
++	/* Cleaning up */
++	pciExit();
++
++	return 0;
++}
++
++unsigned short get_device(char *arg_val)
++{
++	unsigned short devfn=0;
++	long bus=0,dev=0,fn=0,need_pack=0;
++	char *tok;
++	
++	tok = strsep(&arg_val,":");
++	if (arg_val != NULL) {
++		bus = strtol(tok,0,16);
++		need_pack = 1;
++	}
++	else {
++		arg_val = tok;
++	}
++
++	tok = strsep(&arg_val,".");
++	if (arg_val != NULL) {
++		dev = strtol(tok,0,16);
++		fn  = strtol(arg_val,0,16);
++		need_pack = 1;
++	}
++	else {
++		if (need_pack ==1 && (strlen(tok))) {
++			dev = strtol(tok,0,16);			
++		}
++	}
++	
++	if ( need_pack == 1) {
++		devfn = bus<<8 | (dev<<3) | fn;
++	}
++	else {
++		devfn = strtol(tok, 0, 0);
++	}
++
++
++	return devfn;
++}
++
+Index: types.h
+===================================================================
+--- types.h	(revision 238)
++++ types.h	(working copy)
+@@ -1,30 +1,31 @@
+ #ifndef _TYPES_H_
+ #define _TYPES_H_
+ 
+-typedef signed char           int8_t;
++typedef signed char          int8_t;
+ typedef short                int16_t;
+ typedef int                  int32_t;
+ typedef long long            int64_t;
+-typedef unsigned char         uint8_t;
++typedef unsigned char        uint8_t;
+ typedef unsigned short       uint16_t;
+ typedef unsigned int         uint32_t;
+ typedef unsigned long long   uint64_t;
++typedef unsigned int         boolean_t;
+ 
+-typedef __SIZE_TYPE__         size_t;
++typedef __SIZE_TYPE__        size_t;
+ 
+ #define CMDLINE	1024
+ 
+ 
+-typedef short				CHAR16;
+-typedef void				VOID;
++typedef short			CHAR16;
++typedef void			VOID;
+ typedef unsigned long		UINTN;
+-typedef uint8_t				UINT8;
+-typedef UINT8				CHAR8;
+-typedef int16_t				INT16;
+-typedef uint16_t			UINT16;
+-typedef int32_t				INTN;
++typedef uint8_t			UINT8;
++typedef UINT8			CHAR8;
++typedef int16_t			INT16;
++typedef uint16_t		UINT16;
++typedef int32_t			INTN;
+ typedef unsigned int		UINT32;
+-typedef int64_t				INT64;
++typedef int64_t			INT64;
+ typedef unsigned long long	UINT64;
+ 
+ typedef unsigned char		u8;
+@@ -32,7 +33,6 @@
+ typedef unsigned int		u32;
+ typedef unsigned long long	u64;
+ typedef int bool;
+-typedef unsigned int    boolean_t;
+ 
+ #define false 0
+ #define true  1
+@@ -53,6 +53,6 @@
+ volatile uint32_t VIDEO_CURSOR_POSX;
+ volatile uint32_t VIDEO_ATTR;
+ 
++#define printf print
+ 
+-
+ #endif
+Index: darwin_code.c
+===================================================================
+--- darwin_code.c	(revision 238)
++++ darwin_code.c	(working copy)
+@@ -10,14 +10,14 @@
+ getsectbynamefromheader(struct mach_header *mhp, const char *segname, const char *sectname)
+ {
+ 	struct segment_command	*sgp;
+-	struct section			*sp;
+-	long					i, j;
++	struct section		*sp;
++	long			i, j;
+         
+-	//printk("getsectbynamefromheader\n");
++	//print("getsectbynamefromheader\n");
+ 	sgp = (struct segment_command*)((char*)mhp + sizeof(struct mach_header));
+ 	for(i = 0; i < mhp->ncmds; i++){
+ 	    if (sgp->cmd == LC_SEGMENT) {
+-			//printk("sgp->segname = %s, matching to %s.\n", sgp->segname, segname);
++			//print("sgp->segname = %s, matching to %s.\n", sgp->segname, segname);
+ 
+ 			//if (strncmp(sgp->segname, segname, sizeof(sgp->segname)) == 0 || mhp->filetype == MH_OBJECT) {
+ 			if (strncmp(sgp->segname, segname, strlen(sgp->segname)) == 0 || mhp->filetype == MH_OBJECT) {
+@@ -27,7 +27,7 @@
+ 					//	strncmp(sp->segname,  segname,  sizeof(sp->segname)) == 0) {
+ 					if (strncmp(sp->sectname, sectname, strlen(sp->sectname)) == 0 &&
+ 						strncmp(sp->segname,  segname,  strlen(sp->segname)) == 0) {
+-							printk("ATV: found - section %s and segment %s\n", sectname, segname);
++							print("ATV: found - section %s and segment %s\n", sectname, segname);
+ 							return(sp);
+ 					}
+ 					//
+@@ -37,7 +37,7 @@
+ 		}
+ 	    sgp = (struct segment_command *)((char *)sgp + sgp->cmdsize);
+ 	}
+-	printk("ATV: not found - section %s and segment %s\n", sectname, segname);
++	print("ATV: not found - section %s and segment %s\n", sectname, segname);
+ 	//
+ 	return((struct section *)0);
+ }
+@@ -51,7 +51,7 @@
+ {
+ 	const struct section	*sp;
+ 
+-	//printk("getsectdatafromheader\n");
++	//print("getsectdatafromheader\n");
+ 	sp = getsectbynamefromheader(mhp, segname, sectname);
+ 	if(sp == (struct section*)0) {
+ 		*size = 0;
+Index: vmlinuz
+===================================================================
+Cannot display: file marked as a binary type.
+svn:mime-type = application/octet-stream
+Index: darwin_code.h
+===================================================================
+--- darwin_code.h	(revision 498)
++++ darwin_code.h	(working copy)
+@@ -3,7 +3,7 @@
+ 
+ #include "types.h"
+ 
+-#define DARWIN_IMAGE_BASE	0x002000000
++#define DARWIN_IMAGE_BASE	0x02000000
+ // xnu pexpert/pexpert/i386/boot.h
+ /* Values for v_display */
+ #define VGA_TEXT_MODE		0
+Index: initrd.gz
+===================================================================
+Cannot display: file marked as a binary type.
+svn:mime-type = application/octet-stream
+Index: linux_code.c
+===================================================================
+--- linux_code.c	(revision 498)
++++ linux_code.c	(working copy)
+@@ -2,7 +2,6 @@
+ #include	"linux_code.h"
+ #include	"darwin_code.h"
+ 
+-
+ // Descriptor table base addresses & limits for Linux startup.
+ dt_addr_t gdt_addr = { 0x800, 0x94000 };
+ dt_addr_t idt_addr = { 0, 0 }; 
+@@ -78,7 +77,7 @@
+ 	int x = *e820_nr_map;
+ 
+ 	if (x == E820MAX) {
+-		printk(L"ATV: Too many entries in the memory map!\n");
++		print(L"ATV: Too many entries in the memory map!\n");
+ 		return;
+ 	}
+ 
+@@ -96,10 +95,10 @@
+ /*------------------------------------------------------------------------------*/
+ void fill_e820map(boot_params_t *bp)
+ {
+-	int						nr_map, e820_nr_map = 0, i;
+-	UINT64					start, end, size;
+-	efi_memory_desc_t		*md, *p;
+-	struct e820entry		*e820_map;
++	int			nr_map, e820_nr_map = 0, i;
++	UINT64			start, end, size;
++	efi_memory_desc_t	*md, *p;
++	struct e820entry	*e820_map;
+ 
+ 	nr_map = bp->s.efi_mem_map_size/bp->s.efi_mem_desc_size;
+ 	e820_map = (struct e820entry *)bp->s.e820_map;
+@@ -123,10 +122,24 @@
+ 			case EFI_MEMORY_MAPPED_IO_PORT_SPACE:
+ 			case EFI_UNUSABLE_MEMORY:
+ 			case EFI_PAL_CODE:
+-				add_memory_region(e820_map, &e820_nr_map,
+-						  md->phys_addr,
+-						  md->num_pages << EFI_PAGE_SHIFT,
+-						  E820_RESERVED);
++				start = md->phys_addr;
++				size  = md->num_pages << EFI_PAGE_SHIFT;
++				end   = start + size;
++				//
++				// Fix up for EFI that reserve video RAM
++				if (start = 0xA0000ULL && end <= 0xC0000ULL) {
++					print("ATV: video RAM fixed\n");
++					//sleep(10);
++					add_memory_region(e820_map, &e820_nr_map,
++						md->phys_addr,
++						md->num_pages << EFI_PAGE_SHIFT,
++						E820_RAM);
++				} else {
++					add_memory_region(e820_map, &e820_nr_map,
++						md->phys_addr,
++						md->num_pages << EFI_PAGE_SHIFT,
++						E820_RESERVED);
++				}
+ 			break;
+ 			// can be treaded as conventional memory by loader/OS
+ 			case EFI_LOADER_CODE:
+@@ -137,7 +150,15 @@
+ 				start = md->phys_addr;
+ 				size  = md->num_pages << EFI_PAGE_SHIFT;
+ 				end   = start + size;
+-				/* Fix up for BIOS that claims RAM in 640K-1MB region */
++				//
++				// remove real-mode interrupt table/bios parameter address range
++				if (start = 0x00000ULL && end >= 0x800ULL) {
++					start = 0x800ULL;
++					size  = size - start;
++					end   = start + size;
++				}
++
++				// Fix up for BIOS that claims RAM in 640K-1MB region
+ 				if (start < 0x100000ULL && end > 0xA0000ULL) {
+ 					if (start < 0xA0000ULL) {
+ 						/* start < 640K
+@@ -169,7 +190,8 @@
+ 			break;
+ 			default:
+ 				/* We should not hit this case */
+-				printk("ATV: default add_memory_region, should not see this\n");
++				print("ATV: default add_memory_region, should not see this\n");
++				sleep(10);
+ 				add_memory_region(e820_map, &e820_nr_map,
+ 						  md->phys_addr,
+ 						  md->num_pages << EFI_PAGE_SHIFT,
+@@ -184,32 +206,32 @@
+ /*------------------------------------------------------------------------------*/
+ void print_e820_memory_map(boot_params_t *bp)
+ {
+-	int					i;
++	int			i;
+ 	struct e820entry	*e820_map;
+ 	
+ 	e820_map = (struct e820entry*)bp->s.e820_map;
+ 
+ 	for (i = 0; i < bp->s.e820_nrmap; i++) {
+-		printk("ATV: %s: 0x%08X%08X - 0x%08X%08X ", "E820 Map",
++		print("ATV: %s: 0x%08X%08X - 0x%08X%08X ", "E820 Map",
+ 			hi32( e820_map[i].addr ),
+ 			lo32( e820_map[i].addr ),
+ 			hi32( e820_map[i].addr + e820_map[i].size),
+ 			lo32( e820_map[i].addr + e820_map[i].size) );
+ 		switch (e820_map[i].type) {
+ 			case E820_RAM:
+-				printk("(usable)\n");
++				print("(usable)\n");
+ 			break;
+ 			case E820_RESERVED:
+-				printk("(reserved)\n");
++				print("(reserved)\n");
+ 			break;
+ 			case E820_ACPI:
+-				printk("(ACPI data)\n");
++				print("(ACPI data)\n");
+ 			break;
+ 			case E820_NVS:
+-				printk("(ACPI NVS)\n");
++				print("(ACPI NVS)\n");
+ 			break;
+ 			default:
+-				printk("type %u\n", e820_map[i].type);
++				print("type %u\n", e820_map[i].type);
+ 			break;
+ 		}
+ 	}
+@@ -254,11 +276,11 @@
+ 					}
+ 				}
+ 				/*
+-				printk("mem%02d: type=%d, ", i, md->Type );
+-				printk("attr=0x%08X%08X\n", hi32(md->Attribute), lo32(md->Attribute) );
+-				printk("   range=[0x%08X%08X-", hi32(bgn), lo32(bgn) );
+-				printk("0x%08X%08X], ", hi32(end), lo32(end) );
+-				printk("%dMB\n", lo32(md->NumberOfPages >> (20 - EFI_PAGE_SHIFT)) );
++				print("mem%02d: type=%d, ", i, md->Type );
++				print("attr=0x%08X%08X\n", hi32(md->Attribute), lo32(md->Attribute) );
++				print("   range=[0x%08X%08X-", hi32(bgn), lo32(bgn) );
++				print("0x%08X%08X], ", hi32(end), lo32(end) );
++				print("%dMB\n", lo32(md->NumberOfPages >> (20 - EFI_PAGE_SHIFT)) );
+ 				*/
+ 			break;
+ 		}
+@@ -272,28 +294,28 @@
+ 		end = md->phys_addr + (md->num_pages << EFI_PAGE_SHIFT);
+ 		
+ 		/*
+-		printk("mem%02d: type=%d, ", i, md->Type );
+-		printk("attr=0x%08X%08X\n", hi32(md->Attribute), lo32(md->Attribute) );
+-		printk("   range=[0x%08X%08X-", hi32(bgn), lo32(bgn) );
+-		printk("0x%08X%08X], ", hi32(end), lo32(end) );
+-		printk("%dMB\n", lo32(md->NumberOfPages >> (20 - EFI_PAGE_SHIFT)) );
++		print("mem%02d: type=%d, ", i, md->Type );
++		print("attr=0x%08X%08X\n", hi32(md->Attribute), lo32(md->Attribute) );
++		print("   range=[0x%08X%08X-", hi32(bgn), lo32(bgn) );
++		print("0x%08X%08X], ", hi32(end), lo32(end) );
++		print("%dMB\n", lo32(md->NumberOfPages >> (20 - EFI_PAGE_SHIFT)) );
+ 		*/
+ 		
+ 		// find problem free memory segment */
+ 		if ( (bgn == bgn_match) & (end >= end_match) ) {
+ 			UINT64		new_bgn, new_end, new_pages;
+ 
+-			//printk("   found memory overlap\n");                                                       
+-			//printk("   memory range=[0x%08X%08X-", hi32(bgn), lo32(bgn) );
+-			//printk("0x%08X%08X]\n", hi32(end), lo32(end) );
++			//print("   found memory overlap\n");                                                       
++			//print("   memory range=[0x%08X%08X-", hi32(bgn), lo32(bgn) );
++			//print("0x%08X%08X]\n", hi32(end), lo32(end) );
+ 
+ 			new_bgn = end_match;
+ 			new_pages = (end - new_bgn) / (1 << EFI_PAGE_SHIFT);
+ 
+ 			new_end = new_bgn + (new_pages << EFI_PAGE_SHIFT);
+-			printk("ATV:   fixing memory overlap\n");
+-			printk("ATV:   memory range=[0x%08X%08X-", hi32(new_bgn), lo32(new_bgn) );
+-			printk("ATV:     0x%08X%08X]\n", hi32(new_end), lo32(new_end) );
++			print("ATV:   fixing memory overlap\n");
++			print("ATV:   memory range=[0x%08X%08X-", hi32(new_bgn), lo32(new_bgn) );
++			print("ATV:     0x%08X%08X]\n", hi32(new_end), lo32(new_end) );
+ 
+ 			md->phys_addr = new_bgn;
+ 			md->num_pages = new_pages;
+@@ -302,6 +324,7 @@
+ 		p = NextEFIMemoryDescriptor(p, bp->s.efi_mem_desc_size);
+ 	}
+ 
++	/* temp for dt table extraction to test dt table decoder
+ 	for (i = 0, p = (efi_memory_desc_t*)bp->s.efi_mem_map; i < num_maps; i++) {
+ 		UINT64   target;
+ 
+@@ -319,7 +342,7 @@
+ 			new_pages = (target - new_bgn) / (1 << EFI_PAGE_SHIFT);
+ 
+ 			new_end = new_bgn + (new_pages << EFI_PAGE_SHIFT);
+-			printk("ATV:   fixing memory target\n");
++			print("ATV:   fixing memory target\n");
+ 
+ 			md->phys_addr = new_bgn;
+ 			md->num_pages = new_pages;
+@@ -329,6 +352,7 @@
+ 
+ 		p = NextEFIMemoryDescriptor(p, bp->s.efi_mem_desc_size);
+ 	}
++	*/
+ }
+ 
+ 
+Index: boot_loader.c
+===================================================================
+--- boot_loader.c	(revision 498)
++++ boot_loader.c	(working copy)
+@@ -11,16 +11,16 @@
+ 
+ //ACPI=0xfefd000 <6> ACPI 2.0=0xfefd014 <6> SMBIOS=0xfebe000 
+ //[ 0.000000] mem00: type=EFI_CONVENTIONAL_MEMORY,  attr=0xf, range=[0x0000000000000000-0x000000000008f000) (0MB)
+-//[ 0.000000] mem01: type=EFI_ACPI_MEMORY_NVS,		attr=0xf, range=[0x000000000008f000-0x0000000000090000) (0MB)
++//[ 0.000000] mem01: type=EFI_ACPI_MEMORY_NVS,      attr=0xf, range=[0x000000000008f000-0x0000000000090000) (0MB)
+ //[ 0.000000] mem02: type=EFI_CONVENTIONAL_MEMORY,  attr=0xf, range=[0x0000000000090000-0x00000000000a0000) (0MB)
+-//[ 0.000000] mem36: type=EFI_RESERVED_TYPE,		attr=0x0, range=[0x00000000000a0000-0x00000000000c0000) (0MB)
++//[ 0.000000] mem36: type=EFI_RESERVED_TYPE,        attr=0x0, range=[0x00000000000a0000-0x00000000000c0000) (0MB)
+ //[ 0.000000] mem03: type=EFI_CONVENTIONAL_MEMORY,  attr=0xf, range=[0x00000000000c0000-0x000000000b000000) (175MB)
+-//[ 0.000000] mem04: type=EFI_LOADER_DATA,			attr=0xf, range=[0x000000000b000000-0x000000000b66e000) (6MB)
+-//[ 0.000000] mem05: type=EFI_CONVENTIONAL_MEMORY,	attr=0xf, range=[0x000000000b66e000-0x000000000d9c4000) (35MB)
+-//[ 0.000000] mem06: type=EFI_BOOT_SERVICES_DATA,	attr=0xf, range=[0x000000000d9c4000-0x000000000da13000) (0MB)
+-//[ 0.000000] mem07: type=EFI_CONVENTIONAL_MEMORY,	attr=0xf, range=[0x000000000da13000-0x000000000da24000) (0MB)
+-//[ 0.000000] mem08: type=EFI_LOADER_CODE,			attr=0xf, range=[0x000000000da24000-0x000000000da4e000) (0MB)
+-//[ 0.000000] mem09: type=EFI_CONVENTIONAL_MEMORY,	attr=0xf, range=[0x000000000da4e000-0x000000000e6ed000) (12MB)
++//[ 0.000000] mem04: type=EFI_LOADER_DATA,          attr=0xf, range=[0x000000000b000000-0x000000000b66e000) (6MB)
++//[ 0.000000] mem05: type=EFI_CONVENTIONAL_MEMORY,  attr=0xf, range=[0x000000000b66e000-0x000000000d9c4000) (35MB)
++//[ 0.000000] mem06: type=EFI_BOOT_SERVICES_DATA,   attr=0xf, range=[0x000000000d9c4000-0x000000000da13000) (0MB)
++//[ 0.000000] mem07: type=EFI_CONVENTIONAL_MEMORY,  attr=0xf, range=[0x000000000da13000-0x000000000da24000) (0MB)
++//[ 0.000000] mem08: type=EFI_LOADER_CODE,          attr=0xf, range=[0x000000000da24000-0x000000000da4e000) (0MB)
++//[ 0.000000] mem09: type=EFI_CONVENTIONAL_MEMORY,  attr=0xf, range=[0x000000000da4e000-0x000000000e6ed000) (12MB)
+ //
+ 
+ // PCI: BIOS Bug: MCFG area at f0000000 is not E820-reserved
+@@ -28,7 +28,7 @@
+ // pnp: 00:01: iomem range 0xfed1c000-0xfed1ffff could not be reserved
+ // PCI: Failed to allocate mem resource #6:20000@20000000 for 0000:01:00.0
+ 
+-// RAM top					0x10000000
++// RAM top			0x10000000
+ // mach_kernel  loads at	0x02000000
+ // linux kernel loads at	0x00100000
+ // linux kernel reserve to	0x00400000
+@@ -51,7 +51,7 @@
+ //
+ /**********************************************************************/
+ 
+-#define KERNEL_RESERVE_SIZE		0x00400000
++#define KERNEL_RESERVE_SIZE	0x00400000
+ #define BOOT_PARAM_MEMSIZE      0x00004000	// 16384
+ /**********************************************************************/
+ void
+@@ -81,26 +81,26 @@
+ 	VIDEO_CURSOR_POSY = 0;
+ 	VIDEO_ATTR = 0xffc8c8c8;
+ 	//
+-	printk("ATV: ATV_BootLoader v0.8 (http://atv-bootloader.googlecode.com/)\n");
+-	printk("ATV: Copyright (C) 2008 ATV Bootloader Team - Licensed under the GPL v2\n");
+-	printk("ATV: FB Start 0x%08X, with %d height %d rowb %d depth %d\n", 
++	print("ATV: ATV_BootLoader v0.8 (http://atv-bootloader.googlecode.com/)\n");
++	print("ATV: Copyright (C) 2008 ATV Bootloader Team - Licensed under the GPL v2\n");
++	print("ATV: FB Start 0x%08X, with %d height %d rowb %d depth %d\n", 
+ 		mach_bp->video.addr, 
+ 		mach_bp->video.width,  
+ 		mach_bp->video.height, 
+ 		mach_bp->video.rowb, 
+ 		mach_bp->video.depth);
+ 
+-	//printk("mach_bp->devtree_len=0x%08X, mach_bp->devtree_ptr=0x%08X", 
++	//print("mach_bp->devtree_len=0x%08X, mach_bp->devtree_ptr=0x%08X", 
+ 	//	mach_bp->devtree_len, mach_bp->devtree_ptr);
+ 	//sleep(10);
+ 
+ 	// find the kernel and load it in the proper location
+ 	kernel_ptr = (unsigned char*)getsectdatafromheader(&_mh_execute_header, "__TEXT", "__vmlinuz", &kernel_len);
+-	//printk("ATV: kernel_ptr = 0x%08X, kernel_len = 0x%08X\n", kernel_ptr, kernel_len);
++	//print("ATV: kernel_ptr = 0x%08X, kernel_len = 0x%08X\n", kernel_ptr, kernel_len);
+ 	// kernel integrity check
+ 	if (kernel_ptr[0x1FE] != 0x55 || kernel_ptr[0x1FF] != 0xAA) {
+-		printk("ATV: kernel_ptr[0x1FE] = 0x%X, kernel_ptr[0x1FF] = 0x%X\n", kernel_ptr[0x1FE], kernel_ptr[0x1FF]);
+-		printk("ATV: Kernel is not a vmlinuz or bzImage kernel image.\n");
++		print("ATV: kernel_ptr[0x1FE] = 0x%X, kernel_ptr[0x1FF] = 0x%X\n", kernel_ptr[0x1FE], kernel_ptr[0x1FF]);
++		print("ATV: Kernel is not a vmlinuz or bzImage kernel image.\n");
+ 		while(1);
+ 	}
+ 	// load kernel into it in the proper location (1M)
+@@ -114,7 +114,7 @@
+ 
+ 	// find possible initrd, start_kernel will handle loading into a proper location)
+ 	initrd_ptr   = (unsigned char*)getsectdatafromheader(&_mh_execute_header, "__TEXT", "__initrd", &initrd_len);
+-	//printk("ATV: initrd_ptr = 0x%08X, initrd_len = 0x%08X\n", initrd_ptr, initrd_len);
++	//print("ATV: initrd_ptr = 0x%08X, initrd_len = 0x%08X\n", initrd_ptr, initrd_len);
+ 	initrd_start = initrd_ptr;
+ 	initrd_size  = initrd_len;
+ 
+@@ -135,18 +135,18 @@
+ 		mach_bp->video.rowb,
+ 		mach_bp->video.addr);
+ 	*/
+-	printk("ATV: kernel command line-> %s\n", cmdline);
++	print("ATV: kernel command line-> %s\n", cmdline);
+ 
+ 	// now format the linux kernel boot params
+ 	create_boot_params(bp, cmdline);
+ 	//sleep(10);
+ 
+-	printk("ATV: starting Linux...\n");
++	print("ATV: starting Linux...\n");
+ 	// kernel_start = 0x100000 defined in system.c
+ 	kd.kstart = kd.kentry = kernel_start;
+ 	kd.kend   = ((UINT8*)kd.kstart) + KERNEL_RESERVE_SIZE;
+ 	start_kernel(kd.kentry, bp);
+-	printk("ATV: error something's is wrong\n");
++	print("ATV: error something's is wrong\n");
+ 
+ 	while(1);
+ }
+Index: Makefile
+===================================================================
+--- Makefile	(revision 497)
++++ Makefile	(working copy)
+@@ -4,29 +4,45 @@
+ # size -m mach_kernel
+ #
+ #
++CDIR    := $(shell if [ "$$PWD" != "" ]; then echo $$PWD; else pwd; fi)
++TOPDIR  =
++INCDIR  = -I. -I$(TOPDIR)
++
+ # get OS type from shell
+ OSTYPE	= $(shell uname)
+ #
+-ARCH	= i386
+ 
+ # if Linxu, use the darwin-cross tools to compile/link
+ ifeq ($(OSTYPE),Linux)
+-P=/opt/darwin-cross/bin/i386-apple-darwin8-
+-S=-4.0
++#P=/opt/darwin-cross/bin/i386-apple-darwin8-
++#S=-4.0
++  CC  := /opt/darwin-cross/bin/i386-apple-darwin8-gcc-4.0
++  LD  := /opt/darwin-cross/bin/i386-apple-darwin8-ld
++else
++  CC  := /usr/bin/gcc-4.0
++  LD  := /usr/bin/ld_classic
+ endif
+ 
+ # start.o must be 1st in the link order (ld below)
+-OBJ	= start.o vsprintf.o console.o utils.o elilo_code.o darwin_code.o linux_code.o boot_loader.o
++OBJ  = start.o vsprintf.o console.o utils.o elilo_code.o darwin_code.o linux_code.o boot_loader.o
++OBJ += vgabios/vgabios.a
++OBJ += vgabios/x86emu/src/libx86emu.a
++SUBDIRS = vgabios
+ 
+-KERN_OBJ= vmlinuz.obj initrd.obj
++KERN_OBJ:= vmlinuz.obj initrd.obj
+ 
++TARGETS = mach_kernel
++
++all: $(SUBDIRS) $(TARGETS)
++
+ mach_kernel: $(KERN_OBJ) $(OBJ)
+-	${P}ld -arch $(ARCH) -o mach_kernel $(OBJ) $(KERN_OBJ) \
++	$(LD) -arch i386 -o mach_kernel $(OBJ) $(KERN_OBJ) \
++	$(LIBGCC_A) \
+ 	-static \
+ 	-force_cpusubtype_ALL \
+ 	-e __start \
+ 	-segalign 0x1000 \
+-	-segaddr __TEXT 0x2000000 \
++	-segaddr __TEXT 0x02000000 \
+ 	-sectalign __TEXT __text 0x1000 \
+ 	-sectalign __DATA __common 0x1000 \
+ 	-sectalign __DATA __bss 0x1000 \
+@@ -34,22 +50,25 @@
+ 	-sectcreate __PRELINK __symtab /dev/null \
+ 	-sectcreate __PRELINK __info /dev/null
+ 
+-%.o:	%.c
+-	${P}gcc${S} -c -arch $(ARCH) -static -nostdlib -o $@ -c $<
++$(SUBDIRS): dummy
++	$(MAKE) -C $@
+ 
+-%.o:	%.s
+-	${P}gcc${S} -c -arch $(ARCH) -static -nostdlib -DASSEMBLER -o $@ -c $<
++dummy:
+ 
++clean:
++	@set -e ; for d in $(SUBDIRS) ; do $(MAKE) -C $$d $@ ; done
++	rm -f *.o $(KERN_OBJ) mach_kernel
++
+ vmlinuz.obj: vmlinuz
+-	${P}ld -arch $(ARCH) -w -r -o vmlinuz.obj -sectcreate __TEXT __vmlinuz vmlinuz
++	$(LD) -arch i386 -w -r -o vmlinuz.obj -sectcreate __TEXT __vmlinuz vmlinuz
+ 
+ initrd.obj: initrd.gz
+-	${P}ld -arch $(ARCH) -w -r -o initrd.obj -sectcreate __TEXT __initrd initrd.gz
++	$(LD) -arch i386 -w -r -o initrd.obj -sectcreate __TEXT __initrd initrd.gz
+ 
+-clean:
+-	rm -f *.o $(KERN_OBJ) mach_kernel
++%.o: %.c
++	$(CC) -c -arch i386 -static -nostdlib -o $@ -c $<
+ 
++%.o: %.s
++	$(CC) -c -arch i386 -static -nostdlib -DASSEMBLER -o $@ -c $<
+ 
+-
+ #xxd mach_kernel | sed -e "s/ffff ffff 1000/0100 0000 1000/" | xxd -r - mach_kernel
+-

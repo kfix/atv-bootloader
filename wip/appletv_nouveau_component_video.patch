@@ -1,0 +1,40 @@
+--- linux-3.5/drivers/gpu/drm/nouveau/nouveau_bios.c.orig	2012-07-24 17:33:12.403025705 -0700
++++ linux-3.5/drivers/gpu/drm/nouveau/nouveau_bios.c	2012-07-23 02:22:21.978433206 -0700
+@@ -31,6 +31,7 @@
+ 
+ #include <linux/io-mapping.h>
+ #include <linux/firmware.h>
++#include <linux/dmi.h>
+ 
+ /* these defines are made up */
+ #define NV_CIO_CRE_44_HEADA 0x0
+@@ -6091,6 +6092,29 @@
+ 		}
+ 	}
+ 
++	/* AppleTV 1st gen: on-board GeForce Go 7300 (NV46)
++	 *
++	 * The framebuffer is initialized by Apple's EFI-based firmware instead of by NVidia VBIOS.
++	 * EFI passes a hardcoded DCB-like table to the OSX kernel, so its drivers can do their own probing.
++	 * The DCB table that nouveau finds in the VBIOS from PRAMIN is malformed, causing the 
++	 * component TV-output to be plumbed as a SCART connector. Override that with this quirk.
++	 *	[drm] nouveau 0000:01:00.0: DCB version 3.0
++	 *	[drm] nouveau 0000:01:00.0: DCB outp 02: 04021112 00000000
++	 *	[drm] nouveau 0000:01:00.0: DCB outp 03: 020321f1 0081c01c
++	 *	[drm] nouveau 0000:01:00.0: DCB conn 00: 0000
++	 *	[drm] nouveau 0000:01:00.0: DCB conn 01: 1161
++	 *	[drm] nouveau 0000:01:00.0: DCB conn 02: 0213
++	 */
++	if (nv_match_device(dev, 0x01d7, 0x106b, 0x0081)
++		&& dmi_match(DMI_PRODUCT_NAME, "AppleTV1,1") 
++		&& dmi_match(DMI_SYS_VENDOR, "Apple Inc.") ) {
++
++		if (idx == 3) {
++			*conf = *conf | (0x8 << 4); //toggle the 8th from last bit to enable component out
++			NV_TRACEWARN(dev, "DCB outp %02d: AppleTV quirk - enabled TV_COMPONENT output bit\n", idx);
++		}
++	}
++
+ 	return true;
+ }
+ 
