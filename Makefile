@@ -77,8 +77,8 @@ BOOTSECTS = $(shell echo $$[ ( $(BOOTBYTES) / $(SECSZ) ) + $(SECSZ) ] )
 BOOTSECTSALIGN = $(shell echo $$[ $(BOOTSECTS) - ( $(BOOTSECTS) % 63 ) ] )
 FATGEOM = $(shell echo -T $(BOOTSECTSALIGN) -h 255 -s 63) #virtual CHS geometry
 
-#https://code.google.com/p/atv-bootloader/wiki/PartitioningPatchstick
-#https://code.google.com/p/atv-bootloader/wiki/AlternatePartitioning1
+# https://github.com/kfix/atv-bootloader/blob/wiki/PartitioningPatchstick.md
+# https://github.com/kfix/atv-bootloader/blob/wiki/AlternatePartitioning1.md
 RECOFFSET := 40
 RECSTARTBYTE = $(shell echo $$[ ( $(RECOFFSET) * $(SECSZ) ) ] )
 #the appletv efi-rom expects the boot partition to start at 40s(s*512k), boot is much slower if not

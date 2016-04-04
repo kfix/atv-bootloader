@@ -1,6 +1,6 @@
 atv-bootloader 1.0
 ====
-Spork of [atv-bootloader](http://github.com/sdavilla/atv-bootloader) w/LLD build tooling.
+Spork of [atv-bootloader](http://github.com/davilla/atv-bootloader) w/LLD build tooling.
 [Original author's notes](README).
 Original GPLv2 [license](COPYING) applies.
 
@@ -17,7 +17,7 @@ Requirements
   * OSX: brew install gptfdisk mtools
   * Debian: #apt-get install gdisk mtools
 
-- `vmlinuz` & `initrd.img` files in `/boot` or in this project folder
+- `vmlinuz` & `initrd.img` files in `/boot` or in this projects's 'boot' folder
 
 Building
 ---
@@ -25,12 +25,12 @@ Building
 
 Booting
 ---
-If you are building from the AppleTV, just run `make install` to stage the mach_kernel to /boot,
+If you are building from the AppleTV, just run `make install` to stage the mach_kernel to /boot,  
 assuming that /boot is a leading HFS partition on the drive.
 
 You also need some files in /boot to satisfy AppleTV's EFI:  
   * boot.efi
-    - the much maligned checksummed EFI stage1.
+    - the much maligned checksummed AppleTV-EFI bootstrap loader.
   * com.apple.Boot.plist
     - config file for the EFI's Mach-O loader.
   * BootLogo.png
@@ -45,17 +45,17 @@ Why 1.0?
 Not much has changed in the actual bootloader code from 2008, but 10 years  
 of LLVM development allows us to now build simple Mach-O binaries from Linux!  
 
-So the big anti-feature of 1.0 is to *not* ship a precompiled `/mach_kernel`!
+So the big anti-feature of 1.0 is to *not* ship a precompiled `/mach_kernel`!  
 Instead, lld makes it quick and easy to build one at any time from whatever kernel & initrd  
 your Linux distro's installer or package manager provides. That way, you can always boot  
 up-to-date Linux kernels with out any kexec nonsense.
 
 Why now?
 ---
-ATV1 is now in the "vintage computing" genre, but the hardware was ahead of its day.
+ATV1 is now in the "vintage computing" genre, but the hardware was ahead of its day.  
 However the OSX 10.4-lite that it shipped with is now obsolete.  
 
-The lack of hardware 1080 MPEG4 decoding makes ATV1 worse than a RasPi for home media. 
+The lack of hardware 1080 MPEG4 decoding makes ATV1 worse than a RasPi for home media.  
 
 I used atv-bootloader since 2009 to run Linux as a headlesss server, but even with  
 the "patchstick" it was not easy to get post-2009 Linux 3.0+ distributions installed and running.  
@@ -77,7 +77,7 @@ Code layout
 * start.s
   - `__start` trampoline
 * boot_loader.c
-  - main routine
+  - main routine to bootstrap vmlinux
 * darwin_code.c
   - finds the Mach-O segments holding the linux kernel assets in `/mach_kernel`
 * linux_code.c
