@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+        <key>Background Color</key>
+        <integer>0</integer>
+        <key>Boot Fail Logo</key>
+        <string></string>
+        <key>Boot Logo</key>
+        <string>BootLogo.png</string>
+        <key>Boot Graphics</key>
+        <string>No</string>
+        <key>Kernel</key>
+        <string>mach_kernel</string>
+        <key>Kernel Flags</key>
+        <string>-v root=/dev/sda5 blacklist=ide_generic console=tty1 INIT_VERBOSE=yes subroot=/newroot nosplash video=TV-1:1280x720MR@60 intel_idle.max_cstate=1 nohpet</string>
+	<!--
+        -v atv-boot=manual video=vesafb
+        -v atv-boot=manual video=efifb #2.6.24+
+	efifb is cranky, atv-boot is supposed to be passing it the fb's dmi values
+		http://sphinx.mythic-beasts.com/resources/appletv/kernel/2.6.20.6-appletv.patch
+		http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/tree/drivers/video/fbdev/efifb.c?id=HEAD
+		http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/sysfb_efi.c?id=HEAD
+
+        <string>-v root=/dev/sda5 blacklist=ide_generic console=tty1 INIT_VERBOSE=yes subroot=/newroot nosplash video=TV-1:1280x720MR@60 intel_idle.max_cstate=1 nohpet</string>
+                ^Kernel^ is required but is not changeable, ATV's boot.efi will always load the file named "mach_kernel" 
+		^KernelFlags^ the -v is absorbed by boot.efi and allows its output to be shown instead of Boot Logo
+		the other args are handed to mach_kernel...
+	-->
+
+</dict>
+</plist>
